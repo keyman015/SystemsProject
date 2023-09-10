@@ -577,61 +577,43 @@ void read_sysconfig(char argv0[], char filename[]) {
     }
 
     while (fgets(line, sizeof(line), sysconf) != NULL) {    // Loops over every line in the file
-        if (line[0] == CHAR_COMMENT) { continue; }          // Skips commented lines
+        // Skip commented lines
+        if (line[0] == CHAR_COMMENT) { continue; }
 
-        trim_line(line);    // Removes any '\n' or '\r' from the line
-//        printf("                  NEW LINE!             \n");
-        char *token = strtok(line, " \t");  // Tokenises the line by spaces and tabs
-        int state = -1;                     // 0 for 'timequantum', 1 for 'device', 2 for the rspeed, 3 for wspeed (-ve for intermediate states)
+        // Remove any '\n' or '\r' from the line
+        trim_line(line);
 
-        while (token != NULL) {
-//            printf("token: %s\n", token);
-            switch (state) {
-                case 0 :
-                    int qnum = (int) getNum(token, "usec");   // Only 32-bit int is needed
-                    TIME_QUANTUM = qnum;
-                    state = -2;     // Signifies there is no more information to get
-//                    printf("NEW TIME QUANTUM! (%i)\n", qnum);
-                    break;
-                
-                case 1 :
-                    strcpy(devices[DEVICE_COUNT].name, token);
-                    state = 2;       // Move on to read speed
-                    break;
-                
-                case 2 :
-                    long long int num = getNum(token, "Bps");
-                    devices[DEVICE_COUNT].readSpeed = num;
-                    state = 3;       // Move on to write speed
-                    break;
+        // Parsing device configuration
+        if (strncmp(line, "device", 6) == 0) {
+            char dName[MAX_DEVICE_NAME];
+            int rSpeed;
+            int wSpeed;
+            if (sscanf(line, "device %s %iBps %iBps", dName, rSpeed, wSpeed) == 3) {
+                strcpy(devices[DEVICE_COUNT].name, dName);
+                devices[DEVICE_COUNT].readSpeed     = rSpeed;
+                devices[DEVICE_COUNT].writeSpeed    = wSpeed;
 
-                case 3 :
-                    num = getNum(token, "Bps");
-                    devices[DEVICE_COUNT].writeSpeed = num;
-                    DEVICE_COUNT++; // New device added
-                    state = -2;     // Signifies there is no more information to get
-//                    printf("NEW DEVICE ADDED!\n");
-                    break;
+            } else {
+                printf("ERROR: Can't parse device configuration from line: '%s'", line);
+                exit(EXIT_FAILURE);
             }
-            
-            if (strcmp(token, "device") == 0) {
-                state = 1;          // Ready to add new device
-            } else if (strcmp(token, "timequantum") == 0) {
-                state = 0;          // Ready for time quantum update
-            }
-
-            // Move to the next token
-            token = strtok(NULL, " \t");
+            // Incriment device count for correct assignments
+            DEVICE_COUNT++;
         }
 
-        // For the case of an incorrectly typed system configuration file
-        if (state != -2) {
-            printf("There wasn't enough info for one of the lines in the system config file.");
-            printf("~~~~~~~~~~~~~~~~ Please fix the file and retry. ~~~~~~~~~~~~~~~~\n");
-            break;
+        // Parsing timequantum configuration
+        else if (strncmp(line, "timequantum", 11) == 0) {
+            int timeQ;
+            if (sscanf(line, "timequantum %iusec", timeQ) == 1) {
+                TIME_QUANTUM = timeQ;
+
+            } else {
+                printf("ERROR: Can't parse timequantum configuration from line: '%s'", line);
+                exit(EXIT_FAILURE);
+            }
         }
     }
-
+    
     // Close the file
     fclose(sysconf);
 }
