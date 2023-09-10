@@ -1,0 +1,48 @@
+#
+test
+	10usecs    spawn   shortsleep
+	30usecs    spawn   longsleep
+	90usecs    exit
+#
+shortsleep
+	10usecs    sleep   15usecs
+	20usecs    sleep   30usecs
+	50usecs    exit
+#
+test2
+	220usecs   spawn   shortsleep
+	300usecs   spawn   longsleep
+	500usecs   wait
+	1000usecs  exit
+#
+test3
+	80usecs    spawn   copyfile
+	80usecs    spawn   shell
+	10usecs    exit
+#
+test
+	90usecs    read    usb3.1   4000B
+	10usecs    exit
+#
+copyfile
+	200usecs   read    hd       480B
+	300usecs   write   hd       480B
+	600usecs   read    hd       210B
+	700usecs   write   hd       210B
+	1000usecs  exit
+#
+shell
+	100usecs   write   terminal 10B
+	120usecs   read    terminal 4B
+	220usecs   spawn   cal
+	230usecs   wait
+	1000usecs  exit
+#
+longsleep
+	10usecs    sleep   20usecs
+	50usecs    exit
+#
+cal
+	80usecs    write   terminal 2000B
+	90usecs    exit
+#

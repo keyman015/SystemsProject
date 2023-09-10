@@ -1,0 +1,18 @@
+#
+OG
+	60usecs sleep 70usecs
+	70usecs spawn spawn2
+	75usecs sleep 5usecs
+	80usecs spawn spawn1
+	90usecs exit
+#
+spawn1
+	50usecs sleep 40usecs
+	55usecs sleep 100usecs
+	70usecs spawn spawn2
+	90usecs exit
+#
+spawn2
+	60usecs sleep 200usecs
+	90usecs exit
+#

@@ -1,0 +1,25 @@
+#
+shell
+	220usecs   spawn   shortsleep
+	230usecs   wait
+	1000usecs  exit
+#
+shortsleep
+	20usecs    sleep   20usecs
+	500usecs   exit
+#
+longsleep
+	10usecs    sleep   5000000usecs
+	50usecs    exit
+#
+cal
+	80usecs    write   terminal 2000B
+	90usecs    exit
+#
+copyfile
+	200usecs   read    hd       48000B
+	300usecs   write   hd       48000B
+	600usecs   read    hd       21000B
+	700usecs   write   hd       21000B
+	1000usecs  exit
+#
