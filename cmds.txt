@@ -20,10 +20,6 @@ test3
 	80usecs    spawn   shell
 	10usecs    exit
 #
-test
-	90usecs    read    usb3.1   4000B
-	10usecs    exit
-#
 copyfile
 	200usecs   read    hd       480B
 	300usecs   write   hd       480B
