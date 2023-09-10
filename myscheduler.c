@@ -264,7 +264,14 @@ void updateBus(void) {
 }
 
 void tick_bus(void) {
-    
+    for (int i = 0; i < BlockedQueue.count_BLOCKED; i++) {
+        // Incriment only the process that is using the bus currently
+        if (BlockedQueue.currBlocked[i].busProgress == 1) {
+            // IO progresses
+            BlockedQueue.currBlocked[i].blockDuration--;
+            return;
+        }
+    }
 }
 
 
