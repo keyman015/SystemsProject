@@ -263,6 +263,7 @@ void updateBus(void) {
     if (index != -1) {
         strcpy(DEVICE_USING_BUS, BlockedQueue.currBlocked[index].waitingOnDevice);
         BlockedQueue.currBlocked[index].busProgress = 1;    // Next process is now using the bus (IO incriments only while IDLE)
+        BlockedQueue.currBlocked[index].blockDuration += 20;
     }
 }
 
@@ -399,15 +400,17 @@ void tick_work(void) {
             double wSpeed       = (double) devices[devIndex].writeSpeed;
             double capac        = (double) currAction.capacity;
 
-            currProcess.blockDuration   = (int) ceil( capac / wSpeed * 1000000 );   // Ciel to round up (if the duration falls in between in certain cases)
+            currProcess.blockDuration   = (int) ceil( capac / wSpeed * 1000000 ) + 10;   // Ciel to round up (if the duration falls in between in certain cases)
+            printf("Blocked Duration: %i\n", currProcess.blockDuration);
+            //exit(0);
             currProcess.readSpeed       = rSpeed;
             currProcess.busProgress     = -1;                                       // Set the process's busProgress to signify its waiting on the bus for IO
             strcpy(currProcess.waitingOnDevice, currAction.deviceName);
             currProcess.currActionIndex++;
             BlockedQueue_enqueue(currProcess);
-            updateBus();
             time_transition = 10;
             CPUState        = RUNNING_TO_BLOCKED;
+            updateBus();
         }
     } 
 }
@@ -471,8 +474,8 @@ void tick_transition(void) {
 void tick_blocked(void) {
     Process *queue = BlockedQueue.currBlocked;
     for (int i = 0; i < BlockedQueue.count_BLOCKED; i++) {
-        printf("PROCESS ID: %i      Number of spawned processes: %i\n", queue[i].pid, queue[i].numOfSpawnedProcesses);
-        //printf("PID: pid%i (%s) Blocked Duration Remaining: %i\n", queue[i].pid, queue[i].processName, queue[i].blockDuration);
+        //printf("PROCESS ID: %i (%s)     Number of spawned processes: %i     STATE: %d\n", queue[i].pid, queue[i].processName, queue[i].numOfSpawnedProcesses, queue[i].state);
+        printf("PID: pid%i (%s) Blocked Duration Remaining: %i\n", queue[i].pid, queue[i].processName, queue[i].blockDuration);
         // If the process is waiting / using the bus, incriment the waiting time it had spent
         if (queue[i].busProgress == -1) {
             queue[i].waitTime++;
@@ -490,8 +493,10 @@ void tick_blocked(void) {
             continue;
         }
 
+
         // If a regular block has finished its duration OR if a WAITING process has finished waiting, it can be unblocked
         if ((queue[i].blockDuration <= 0 && queue[i].state == BLOCKED) || (queue[i].state == WAITING && queue[i].numOfSpawnedProcesses == 0)) {
+            //printf("Process added to be removed from blocked queue\n");
             BlockedQueue.waitingUnblock[BlockedQueue.count_waitingUNBLOCK] = i;
             BlockedQueue.count_waitingUNBLOCK++;
             queue[i].state = WAITING_UNBLOCK;
@@ -521,7 +526,8 @@ void execute_commands(void) {
 
     while (CPUState != IDLE || count_READY > 0 || BlockedQueue.count_BLOCKED > 0 || BlockedQueue.count_waitingUNBLOCK > 0) { // While either the blocked or ready queue are not empty
     //printf("Ready Queue: %i     Blocked Queue: %i   Waiting Unblock: %i\n", count_READY, BlockedQueue.count_BLOCKED, BlockedQueue.count_waitingUNBLOCK);
-        if (globalClock == 600) {
+    //printf("NEXT ON READY: %s\n", nextOnREADY.processName);
+        if (globalClock == 5000) {
             exit(0);
         }
 
