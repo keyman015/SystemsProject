@@ -726,6 +726,9 @@ void read_commands(char argv0[], char filename[]) {
         }
     }
 
+    // Incriment the command count to match the number of commands
+    COMMAND_COUNT++;
+
     // Close the commands configuration file
     fclose(cmds);
 }
@@ -798,7 +801,7 @@ int main(int argc, char *argv[]) {
     }
 
 //  READ THE SYSTEM CONFIGURATION FILE
-    //read_sysconfig(argv[0], argv[1]);
+    read_sysconfig(argv[0], argv[1]);
     //_dump_systemConfig();
 
 //  READ THE COMMAND FILE
@@ -815,7 +818,7 @@ int main(int argc, char *argv[]) {
     //_dump_commands();
 
 //  EXECUTE COMMANDS, STARTING AT FIRST IN command-file, UNTIL NONE REMAIN
-    //execute_commands();
+    execute_commands();
 
 //  PRINT THE PROGRAM'S RESULTS
     printf("measurements  %i  %i\n", globalClock,  (cpuTime*100 / globalClock));    // Integer division to truncate
