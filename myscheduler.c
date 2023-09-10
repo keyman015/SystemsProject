@@ -504,7 +504,6 @@ void tick_blocked(void) {
 
 
 
-
 int tempElapsed = 0;
 void execute_commands(void) {
     printf("-------------------------------------------------------------------------\n\n");
