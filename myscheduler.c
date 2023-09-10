@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <unistd.h>
 #include <math.h>
 //  you may need other standard header files
@@ -44,7 +45,7 @@
 #define BUFFER_SIZE                     1024
 int     DEVICE_COUNT = 0;
 int     TIME_QUANTUM = DEFAULT_TIME_QUANTUM;
-int     COMMAND_COUNT = 0;
+int     COMMAND_COUNT = -1;                     // Count is increased for every new command found (so it will be increased to start at indexing 0)
 char    DEVICE_USING_BUS[MAX_DEVICE_NAME] = ""; // Nothing is using the bus currently
 
 
@@ -73,9 +74,9 @@ typedef struct {    // Not all values will have a value, some may be NULL
     char sysCallName[MAX_SYSCALL_NAME];
     char deviceName[MAX_DEVICE_NAME];
     char processName[MAX_PROCESS_NAME];
-    long long int capacity;
+    int capacity;
     int sleepDuration;
-} sysCall;
+} SystemCall;
 
 typedef enum {
     NEW,
@@ -106,7 +107,7 @@ typedef struct {
     int elapsedCPUTime;
     char waitingOnDevice[MAX_DEVICE_NAME];
     int blockDuration;
-    sysCall processSyscalls[MAX_SYSCALLS_PER_PROCESS];
+    SystemCall processSyscalls[MAX_SYSCALLS_PER_PROCESS];
     int busProgress;    // 0 for bus not needed, -1 for bus is needed, 1 for process is using bus, 2 for process has finished with bus
     int readSpeed;
     int waitTime;
@@ -118,14 +119,14 @@ typedef struct {
 
 struct {
     char name[MAX_DEVICE_NAME];
-    long long int readSpeed;    // 64-bit values
-    long long int writeSpeed;
+    int readSpeed;    // 64-bit values
+    int writeSpeed;
 } devices[MAX_DEVICES];
 
 struct {
     char name[MAX_COMMAND_NAME];
     int numActions;
-    sysCall actions[MAX_SYSCALLS_PER_PROCESS];   // Array of all system call actions (in order)
+    SystemCall actions[MAX_SYSCALLS_PER_PROCESS];   // Array of all system call actions (in order)
 } commands[MAX_COMMANDS];
 
 struct {
@@ -311,7 +312,7 @@ void tick_work(void) {
     //printf("Process Name: %s\n", currProcess.processName);
     //printf("Process Duration Reamining: %i\n", currProcess.processSyscalls[currProcess.currActionIndex].duration);
     //printf("Process ElapsedCpu time: %i\n", currProcess.elapsedCPUTime);
-    sysCall currAction = currProcess.processSyscalls[currProcess.currActionIndex];
+    SystemCall currAction = currProcess.processSyscalls[currProcess.currActionIndex];
     currProcess.elapsedCPUTime++;
     cpuTime++;
     TQelapsed++;
@@ -566,10 +567,9 @@ void execute_commands(void) {
 #define CHAR_COMMENT                    '#'
 
 
+// This function is from the lectures
 void trim_line(char line[]) {
-    // Following code is from lectures
     int i = 0;
-
     while (line[i] != '\0') {
         if (line[i] == '\r' || line[i] == '\n') {   // Has support for windows-style line endings
             line[i] = '\0';
@@ -579,17 +579,14 @@ void trim_line(char line[]) {
     }
 }
 
-long long int getNum(char word[], char text[]) {
-    // Removes 'text' from 'word' and then extracts the number from the remaining 'word'
-    char *textPos = strstr(word, text);
-
-    if (textPos != NULL) {              // The text exists within the word
-        *textPos = '\0';
+void check_commandName(const char *cName) {
+    for (int i = 0; i < COMMAND_COUNT; i++) {
+        if (strcmp(cName, commands[i].name) == 0) {
+            printf("ERROR: Can't have two commands with the same name '%s'.\n", cName);
+            exit(EXIT_FAILURE);
+        }
     }
-
-    return atoi(word);   // Converts the number to long long int for long read/write speeds
 }
-
 
 
 void read_sysconfig(char argv0[], char filename[]) {
@@ -601,59 +598,42 @@ void read_sysconfig(char argv0[], char filename[]) {
         exit(EXIT_FAILURE);
     }
 
-    while (fgets(line, sizeof(line), sysconf) != NULL) {    // Loops over every line in the file
-        if (line[0] == CHAR_COMMENT) { continue; }          // Skips commented lines
+    // Loop over every line in the system configuration file until the end
+    while (fgets(line, sizeof(line), sysconf) != NULL) {
+        // Skip commented lines
+        if (line[0] == CHAR_COMMENT) { continue; }
 
-        trim_line(line);    // Removes any '\n' or '\r' from the line
-//        printf("                  NEW LINE!             \n");
-        char *token = strtok(line, " \t");  // Tokenises the line by spaces and tabs
-        int state = -1;                     // 0 for 'timequantum', 1 for 'device', 2 for the rspeed, 3 for wspeed (-ve for intermediate states)
+        // Remove any '\n' or '\r' from the line
+        trim_line(line);
 
-        while (token != NULL) {
-//            printf("token: %s\n", token);
-            switch (state) {
-                case 0 :
-                    int qnum = (int) getNum(token, "usec");   // Only 32-bit int is needed
-                    TIME_QUANTUM = qnum;
-                    state = -2;     // Signifies there is no more information to get
-//                    printf("NEW TIME QUANTUM! (%i)\n", qnum);
-                    break;
-                
-                case 1 :
-                    strcpy(devices[DEVICE_COUNT].name, token);
-                    state = 2;       // Move on to read speed
-                    break;
-                
-                case 2 :
-                    long long int num = getNum(token, "Bps");
-                    devices[DEVICE_COUNT].readSpeed = num;
-                    state = 3;       // Move on to write speed
-                    break;
+        // Parsing device configuration
+        if (strncmp(line, "device", 6) == 0) {
+            char dName[MAX_DEVICE_NAME];
+            int rSpeed;
+            int wSpeed;
+            if (sscanf(line, "device %s %iBps %iBps", dName, &rSpeed, &wSpeed) == 3) {
+                strcpy(devices[DEVICE_COUNT].name, dName);
+                devices[DEVICE_COUNT].readSpeed     = rSpeed;
+                devices[DEVICE_COUNT].writeSpeed    = wSpeed;
 
-                case 3 :
-                    num = getNum(token, "Bps");
-                    devices[DEVICE_COUNT].writeSpeed = num;
-                    DEVICE_COUNT++; // New device added
-                    state = -2;     // Signifies there is no more information to get
-//                    printf("NEW DEVICE ADDED!\n");
-                    break;
+            } else {
+                printf("ERROR: Can't parse device configuration from the line: '%s'.\n", line);
+                exit(EXIT_FAILURE);
             }
-            
-            if (strcmp(token, "device") == 0) {
-                state = 1;          // Ready to add new device
-            } else if (strcmp(token, "timequantum") == 0) {
-                state = 0;          // Ready for time quantum update
-            }
-
-            // Move to the next token
-            token = strtok(NULL, " \t");
+            // Incriment device count for correct assignments
+            DEVICE_COUNT++;
         }
 
-        // For the case of an incorrectly typed system configuration file
-        if (state != -2) {
-            printf("There wasn't enough info for one of the lines in the system config file.");
-            printf("~~~~~~~~~~~~~~~~ Please fix the file and retry. ~~~~~~~~~~~~~~~~\n");
-            break;
+        // Parsing timequantum configuration
+        else if (strncmp(line, "timequantum", 11) == 0) {
+            int timeQ;
+            if (sscanf(line, "timequantum %iusec", &timeQ) == 1) {
+                TIME_QUANTUM = timeQ;
+
+            } else {
+                printf("ERROR: Can't parse timequantum configuration from the line: '%s'.\n", line);
+                exit(EXIT_FAILURE);
+            }
         }
     }
 
@@ -661,99 +641,95 @@ void read_sysconfig(char argv0[], char filename[]) {
     fclose(sysconf);
 }
 
-
-
-
 void read_commands(char argv0[], char filename[]) {
     FILE *cmds = fopen(filename, "r");
     char line[BUFFER_SIZE];
 
     if (cmds == NULL) {
-        printf("Cannot open command file '%s'. Please try again.\n", filename);
+        printf("ERROR: Cannot open command file '%s'. Please try again.\n", filename);
         exit(EXIT_FAILURE);
     }
 
+    // Loop over every line in the command configuration file until the end
+    while (fgets(line, sizeof(line), cmds) != NULL) {
+        // Skip commented lines
+        if (line[0] == CHAR_COMMENT) { continue; }
 
-    while (fgets(line, sizeof(line), cmds) != NULL) {       // Loops over every line in the file
-        if (line[0] == CHAR_COMMENT) { continue; }          // Skips commented lines
+        // Remove any '\n' or '\r' from the line
+        trim_line(line);
 
-//        printf("                  NEW LINE!             \n");
-        trim_line(line);                                    // Removes any '\n' or '\r' from the line
-        char *token = strtok(line, " \t");                  // Tokenises the line by spaces and tabs
-        int index_word = 0;                                 // Indexing starts from 0 (max is 3)
-        int index_currCMD = COMMAND_COUNT - 1;
-        int index_action;
-        int finished = -1;
+        // Parsing a new command
+        if (line[0] != '\t') {
+            char cName[MAX_COMMAND_NAME];
+            if (sscanf(line, "%s", cName) == 1) {
+                COMMAND_COUNT++;
+                check_commandName(cName);  // Check if the name is not a repeat
+                strcpy(commands[COMMAND_COUNT].name, cName);
 
-        // If a line starts with a tab, then the line is a part of the last command, else its a new command
-        if (line[0] == '\t') {
-            index_action++;                                 // A new action, increasing the counter
-            finished = 0;
-//            printf("ANOTHER ACTION TO ADD...\n");
-
-        } else {
-            strcpy(commands[COMMAND_COUNT].name, token);    // Since the current token is the command name
-            COMMAND_COUNT++;                                // New command added
-            index_action = -1;                              // Resets action counter so a new tabbed line can incriment it to zero
-//            printf("A NEW COMMAND TO ADD...\n");
-            continue;                                        // Look for next line to add actions to the new command
-        }
-
-        // ONLY ACTIONS (NON-COMMAND NAMES) PASS THIS POINT AND ARE PROCESSED
-        while (token != NULL) {                             // Loops over all words in the line
-//            printf("token: %s\t\t\t-> WORD INDEX: %i\n", token, index_word);
-            switch (index_word) {
-                case 0: // Duration of action
-                    commands[index_currCMD].actions[index_action].duration = (int) getNum(token, "usecs"); // 32-bit int only
-                    break;
-                
-                case 1: // sysCallName
-                    strcpy(commands[index_currCMD].actions[index_action].sysCallName, token);
-                    
-                    // No further information is needed from 'exit' OR 'wait' system call
-                    if (strcmp(token, "exit") == 0 || strcmp(token, "wait") == 0) { finished = 1; }
-                    break;
-
-                case 2: // deviceName OR processName OR nothing (exit)
-                    char sysCallName[MAX_SYSCALL_NAME];     // TEMP VALUE FOR LESS CLUTTER
-                    strcpy(sysCallName, commands[index_currCMD].actions[index_action].sysCallName);
-
-                    if (strcmp(sysCallName, "read") == 0 || strcmp(sysCallName, "write") == 0) { 
-                        strcpy(commands[index_currCMD].actions[index_action].deviceName, token);
-
-                    } else if (strcmp(sysCallName, "spawn") == 0) {
-                        strcpy(commands[index_currCMD].actions[index_action].processName, token);
-                        finished  = 1;
-                    
-                    } else if (strcmp(sysCallName, "sleep") == 0) {  // NOTE: COULD REMOVE THIS ONE BECAUSE ONLY ONE LEFT ---------------------------------------
-                        commands[index_currCMD].actions[index_action].sleepDuration = (int) getNum(token, "usecs");
-                        finished  = 1;
-                    }
-                    break;
-
-                case 3: // Capacity for read/write
-                    commands[index_currCMD].actions[index_action].capacity = getNum(token, "B");
-                    finished  = 1;
-                    break;
+            } else {
+                printf("ERROR: Can't parse a command name from the line: '%s'.\n", line);
+                exit(EXIT_FAILURE);
             }
 
-            // Move to the next token (word)
-            token = strtok(NULL, " \t");
-            index_word++;
+        // Parsing a new system call for the current command
+        } else {
+            bool error = false;
+            int duration;
+            int capacity;
+            int sleepDur;
+            char sysCallName[MAX_SYSCALL_NAME];
+            char spawnN[MAX_COMMAND_NAME];
+            char deviceN[MAX_DEVICE_NAME];
+
+            // Seperate each system call
+            if (sscanf(line, "%iusecs %s", &duration, sysCallName) == 2) {
+                SystemCall *currAction = &commands[COMMAND_COUNT].actions[commands[COMMAND_COUNT].numActions];
+
+                if (strcmp(sysCallName, "read") == 0 || strcmp(sysCallName, "write") == 0) {
+                    if (sscanf(line, "%iusecs %s %s %iB", &duration, sysCallName, deviceN, &capacity) == 4) {
+                        currAction->duration        = duration;
+                        currAction->capacity        = capacity;
+                        strcpy(currAction->sysCallName, sysCallName);
+                        strcpy(currAction->deviceName, deviceN);
+                    } else { error = true; }
+
+                } else if (strcmp(sysCallName, "sleep") == 0) {
+                    if (sscanf(line, "%iusecs %s %iusecs ", &duration, sysCallName, &sleepDur) == 3) {
+                        currAction->duration        = duration;
+                        currAction->sleepDuration   = sleepDur;
+                        strcpy(currAction->sysCallName, sysCallName);
+                    } else { error = true; }
+                
+                } else if (strcmp(sysCallName, "spawn") == 0) {
+                    if (sscanf(line, "%iusecs %s %s ", &duration, sysCallName, spawnN) == 3) {
+                        currAction->duration        = duration;
+                        strcpy(currAction->sysCallName, sysCallName);
+                        strcpy(currAction->processName, spawnN);
+                    } else { error = true; }
+
+                } else if (strcmp(sysCallName, "wait") == 0 || strcmp(sysCallName, "exit") == 0) {
+                    currAction->duration            = duration;
+                    strcpy(currAction->sysCallName, sysCallName);
+
+                } else {
+                    // System call does not exist
+                    error = true;
+                }
+                // Incriment the number of actions
+                commands[COMMAND_COUNT].numActions++;
+            }
+
+            if (error) {
+                printf("ERROR: Can't parse a system call configuration from the line: '%s'.\n", line);
+                exit(EXIT_FAILURE);
+            }
         }
-
-        // For the case of an incorrectly typed command configuration file
-        if (finished <= 0) {
-            printf("There wasn't enough info for command '%s', action number '%i'.\n", commands[index_currCMD].name, index_action+1);
-            printf("~~~~~~~~~~~~~~~~ Please fix the file and retry. ~~~~~~~~~~~~~~~~\n");
-            break; // Break from reading the file, since it wont process properly anyways
-        } 
-
-        // Set number of actions after they've all been added (add one to account for index offset)
-        commands[index_currCMD].numActions = index_action + 1;
     }
 
+    // Incriment the command count to match the number of commands
+    COMMAND_COUNT++;
 
+    // Close the commands configuration file
     fclose(cmds);
 }
 
@@ -766,8 +742,8 @@ void _dump_systemConfig() {
     for (int i = 0; i < DEVICE_COUNT; i++) {
         printf("DEVICE %i\n", i+1);
         printf("name: %s\n", devices[i].name);
-        printf("rspeed: %lli\n", devices[i].readSpeed);
-        printf("wspeed: %lli\n", devices[i].writeSpeed);
+        printf("rspeed: %i\n", devices[i].readSpeed);
+        printf("wspeed: %i\n", devices[i].writeSpeed);
         printf("\n");
     }
 }
@@ -778,8 +754,8 @@ void _dump_commands() {
 
     for (int i = 0; i < COMMAND_COUNT; i++) {
         printf("COMMAND %i\n", i+1);
-        printf("name: %s\n", commands[i].name);
-        printf("num actions: %i\n", commands[i].numActions);
+        printf("Name: %s\n", commands[i].name);
+        printf("Num actions: %i\n", commands[i].numActions);
 
         for (int j = 0; j < commands[i].numActions; j++) {
             printf("\t");
@@ -797,15 +773,14 @@ void _dump_commands() {
                 continue;
 
             } else if (strcmp(sysCallName, "sleep") == 0) {
-                printf("%i\n", commands[i].actions[j].sleepDuration);
+                printf("%iusecs\n", commands[i].actions[j].sleepDuration);
                 continue;
 
             } else if (strcmp(sysCallName, "read") == 0 || strcmp(sysCallName, "write") == 0) {
                 printf("%s\t", commands[i].actions[j].deviceName);
-                printf("%lli\n", commands[i].actions[j].capacity);
+                printf("%iB\n", commands[i].actions[j].capacity);
                 continue;
             }
-
         }
         printf("\n");
     }
@@ -840,6 +815,7 @@ int main(int argc, char *argv[]) {
     //read_sysconfig(argv0, sysname);
     //char cmdname[] = "cmds.txt";
     //read_commands(argv0, cmdname);
+    //_dump_commands();
 
 //  EXECUTE COMMANDS, STARTING AT FIRST IN command-file, UNTIL NONE REMAIN
     execute_commands();
