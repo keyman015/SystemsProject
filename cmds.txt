@@ -2,11 +2,10 @@
 test3
 	80usecs    spawn   shortsleep
 	90usecs    spawn   longsleep
-	230usecs   wait
 	1000usecs  exit
 #
 test2
-	100usecs  spawn   shortsleep
+	105usecs  spawn   shortsleep
 	300usecs  exit
 #
 shortsleep
@@ -38,5 +37,5 @@ cal
 #
 longsleep
 	100usecs    sleep   20usecs
-	150usecs    exit
+	125usecs    exit
 #
