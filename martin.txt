@@ -1,0 +1,61 @@
+#
+main
+	1usecs spawn proc1
+	2usecs spawn proc2
+	3usecs spawn proc3
+	5usecs sleep 20usecs
+	10usecs spawn proc4
+	12usecs sleep 20usecs
+	15usecs wait
+	18usecs exit
+#
+proc1
+	1usecs spawn proc5
+	3usecs sleep 20usecs
+	6usecs wait
+	9usecs exit
+#
+proc2
+	1usecs sleep 20usecs
+	4usecs spawn proc6
+	10usecs wait
+	13usecs exit
+#
+proc3
+	1usecs spawn proc7
+	4usecs sleep 20usecs
+	7usecs wait
+	10usecs exit
+#
+proc4
+	1usecs spawn proc8
+	4usecs sleep 20usecs
+	7usecs wait
+	10usecs exit
+#
+proc5
+	1usecs sleep 20usecs
+	4usecs wait
+	7usecs exit
+#
+proc6
+	1usecs spawn proc9
+	4usecs sleep 20usecs
+	7usecs wait
+	10usecs exit
+#
+proc7
+	1usecs sleep 20usecs
+	4usecs wait
+	7usecs exit
+#
+proc8
+	1usecs sleep 20usecs
+	4usecs wait
+	7usecs exit
+#
+proc9
+	1usecs sleep 20usecs
+	4usecs wait
+	7usecs exit
+#

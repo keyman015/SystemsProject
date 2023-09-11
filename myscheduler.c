@@ -319,6 +319,16 @@ void tick_work(void) {
     cpuTime++;
     TQelapsed++;
 
+    if (TQelapsed == TIME_QUANTUM) {
+        printf("@%08d    time quantum expired, pid%i.RUNNING->READY, transition takes 10usecs (%i..%i)\n", globalClock, currProcess.pid, globalClock+1, globalClock+10);
+        readyQueue_enqueue(currProcess);
+        time_transition = 10;
+        CPUState = RUNNING_TO_READY;
+        TQelapsed = 0;
+        // Time limit reached, cannot do any more work
+        return;
+    }
+
     if (currAction.duration - currProcess.elapsedCPUTime <= 0) {
         TQelapsed = 0; 
         //PROCESS THE SYSTEM CALL
@@ -363,12 +373,12 @@ void tick_work(void) {
             CPUState = SPAWN;                                                       // Spawn is processed on the next tick seperately
         
         }   else if (strcmp(currAction.sysCallName, "wait") == 0) {
-            currProcess.state = WAITING;                                            // Signify the process is waiting
-            currProcess.currActionIndex++;
-            printf("@%08d    wait, pid%i.RUNNING->WAITING\n", globalClock, currProcess.pid);
-            BlockedQueue_enqueue(currProcess);
-            time_transition = 10;
-            CPUState = RUNNING_TO_BLOCKED;
+            if (currProcess.numOfSpawnedProcesses == 0) {
+                CPUState = RUNNING_TO_READY;
+            } else {
+                CPUState = RUNNING_TO_BLOCKED;
+            }
+            time_transition = -1;       // For intermediate state (allows wait to be processed on the next tick)
         
         }   else if (strcmp(currAction.sysCallName, "read") == 0) {
             int devIndex        = find_deviceIndex(currAction.deviceName);          // Finds array index of the device (crashes if it doesnt exist)
@@ -404,32 +414,43 @@ void tick_work(void) {
             updateBus();
         }
     } 
-
-    if (TQelapsed == TIME_QUANTUM) {
-        printf("@%08d    Time quantum expired, pid%i.RUNNING->READY, transition takes 10usecs (%i..%i)\n", globalClock, currProcess.pid, globalClock+1, globalClock+10);
-        //currProcess.processSyscalls[currProcess.currActionIndex].duration -= TIME_QUANTUM;
-        readyQueue_enqueue(currProcess);
-        time_transition = 10;
-        CPUState = RUNNING_TO_READY;
-        TQelapsed = 0;
-        return;
-    }
 }
 
 
 void tick_transition(void) {
+    // For sleep system call
     if (CPUState == RUNNING_TO_SLEEPING && time_transition == -1) {
         currProcess.blockDuration = currProcess.processSyscalls[currProcess.currActionIndex].sleepDuration;
         currProcess.currActionIndex++;
         BlockedQueue_enqueue(currProcess); 
         time_transition = 10;
-        printf("@%08d    Sleep %i , pid%i.RUNNING->SLEEPING, transition takes 10usecs (%i..%i)\n", globalClock, currProcess.blockDuration, currProcess.pid, globalClock+1, globalClock+10);
+        printf("@%08d    sleep %i , pid%i.RUNNING->SLEEPING, transition takes 10usecs (%i..%i)\n", globalClock, currProcess.blockDuration, currProcess.pid, globalClock+1, globalClock+10);
+        return;
+    
+    // For wait system call with NO child processes
+    } else if (CPUState == RUNNING_TO_READY && time_transition == -1) {
+        currProcess.currActionIndex++;
+        readyQueue_enqueue(currProcess);
+        time_transition = 10;
+        printf("@%08d    wait (but no child processes), pid%i.RUNNING->READY\n", globalClock, currProcess.pid);
+        printf("@%08d    transition takes 10usecs (%i..%i)\n", globalClock, globalClock+1, globalClock+10);
+        return;
+    
+    // For wait system call with child processes
+    } else if (CPUState == RUNNING_TO_BLOCKED && time_transition == -1) {
+        currProcess.state = WAITING;    // Signify the process is waiting
+        currProcess.currActionIndex++;
+        BlockedQueue_enqueue(currProcess);
+        time_transition = 10;
+        printf("@%08d    wait, pid%i.RUNNING->WAITING\n", globalClock, currProcess.pid);
+        printf("@%08d    transition takes 10usecs (%i..%i)\n", globalClock, globalClock+1, globalClock+10);
         return;
 
+    // For spawn system call
     } else if (CPUState == SPAWN) {
         time_transition = 10;
         CPUState = RUNNING_TO_READY;    // Put the current process (the parent) back onto READY queue (already done in the previous tick)
-        printf("@%08d    Spawn '%s', pid%i.NEW->READY, transition takes 0usecs\n",globalClock, currProcess.processSyscalls[currProcess.currActionIndex-1].processName, pid-1);
+        printf("@%08d    spawn '%s', pid%i.NEW->READY, transition takes 0usecs\n",globalClock, currProcess.processSyscalls[currProcess.currActionIndex-1].processName, pid-1);
         printf("@%08d    pid%i.RUNNING->READY, transition takes 10usecs (%i..%i)\n", globalClock, currProcess.pid, globalClock+1, globalClock+10);
         return;
     }
@@ -468,7 +489,6 @@ void tick_transition(void) {
             default:
                 break;
         }
-        return;
     }
 }
 
@@ -609,8 +629,8 @@ void read_sysconfig(char argv0[], char filename[]) {
 
     // Loop over every line in the system configuration file until the end
     while (fgets(line, sizeof(line), sysconf) != NULL) {
-        // Skip commented lines
-        if (line[0] == CHAR_COMMENT) { continue; }
+        // Skip commented lines & empty lines
+        if (line[0] == CHAR_COMMENT || line[0] == '\0' || line[0] == '\n') { continue; }
 
         // Remove any '\n' or '\r' from the line
         trim_line(line);
@@ -644,6 +664,12 @@ void read_sysconfig(char argv0[], char filename[]) {
                 exit(EXIT_FAILURE);
             }
         }
+
+        else {
+            // Uncrecognisable line
+            printf("ERROR: Unrecognisable line: '%s'.\n", line);
+            exit(EXIT_FAILURE);
+        }
     }
 
     // Close the file
@@ -661,8 +687,8 @@ void read_commands(char argv0[], char filename[]) {
 
     // Loop over every line in the command configuration file until the end
     while (fgets(line, sizeof(line), cmds) != NULL) {
-        // Skip commented lines
-        if (line[0] == CHAR_COMMENT) { continue; }
+        // Skip commented lines & empty lines
+        if (line[0] == CHAR_COMMENT || line[0] == '\0' || line[0] == '\n') { continue; }
 
         // Remove any '\n' or '\r' from the line
         trim_line(line);
@@ -726,6 +752,10 @@ void read_commands(char argv0[], char filename[]) {
                 }
                 // Incriment the number of actions
                 commands[COMMAND_COUNT].numActions++;
+
+            } else {
+                // Incorrectly typed line
+                error = true;
             }
 
             if (error) {
