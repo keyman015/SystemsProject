@@ -131,15 +131,20 @@ struct {
 
 struct {
     int count_BLOCKED;
-    int count_waitingUNBLOCK;
+    int count_IO;
+    int count_WAITING;
+    int count_SLEEPING;
     Process currBlocked[MAX_RUNNING_PROCESSES];
-    int waitingUnblock[MAX_RUNNING_PROCESSES];
+    int unblockIO[MAX_RUNNING_PROCESSES];
+    int unblockWAITING[MAX_RUNNING_PROCESSES];
+    int unblockSLEEPING[MAX_RUNNING_PROCESSES];
 } BlockedQueue;
 
 int count_READY = 0;
 Process readyQueue[MAX_RUNNING_PROCESSES];
 CPUStates CPUState = IDLE;
 int time_transition = 0;
+int nprocesses = 0;
 Process currProcess;
 Process nextOnREADY;
 void readyQueue_enqueue(Process p);
@@ -186,6 +191,7 @@ void initliasiseProcess(int cmdIndex, int parentPid, int spawned) {
     // Copy all the system calls from system configuration for a given command
     for (int i = 0; i < MAX_SYSCALLS_PER_PROCESS; i++) { p.processSyscalls[i] = commands[cmdIndex].actions[i]; }
     pid++;  // Incriment the next available pid
+    nprocesses++;
     readyQueue_enqueue(p);
 }
 
@@ -225,20 +231,42 @@ void BlockedQueue_enqueue(Process p) {
     }
 }
 
-void BlockedQueue_dequeueByIndex(int index) {
-    nextOnREADY = BlockedQueue.currBlocked[index];
+void BlockedQueue_dequeueNext(void) {
+    int index_to_unblock;
 
-    for (int i = index; i < BlockedQueue.count_BLOCKED - 1; i++) {
+    // Only processes one unblock at a time (given the order)
+    if (BlockedQueue.count_SLEEPING > 0) {
+        printf("SLEEPING UNBLOCK (count: %i)\n", BlockedQueue.count_SLEEPING);
+        index_to_unblock = BlockedQueue.unblockSLEEPING[0];
+        printf("Index unblocking: %i\n", BlockedQueue.unblockSLEEPING[0]);
+        for (int i = 0; i < BlockedQueue.count_SLEEPING - 1; i++) {
+            BlockedQueue.unblockSLEEPING[i] = BlockedQueue.unblockSLEEPING[i+1];
+        }
+        BlockedQueue.count_SLEEPING--;
+
+    } else if (BlockedQueue.count_WAITING > 0) {
+        printf("WAITING UNBLOCK\n");
+        index_to_unblock = BlockedQueue.unblockWAITING[0];
+        for (int i = 0; i < BlockedQueue.count_WAITING - 1; i++) {
+            BlockedQueue.unblockWAITING[i] = BlockedQueue.unblockWAITING[i+1];
+        }
+        BlockedQueue.count_WAITING--;
+
+    } else if (BlockedQueue.count_IO > 0) {
+        printf("IO UNBLOCK\n");
+        index_to_unblock = BlockedQueue.unblockIO[0];
+        for (int i = 0; i < BlockedQueue.count_IO - 1; i++) {
+            BlockedQueue.unblockIO[i] = BlockedQueue.unblockIO[i+1];
+        }
+        BlockedQueue.count_IO--;
+    }
+
+    // Remove the processes from the queue and move everything up
+    nextOnREADY = BlockedQueue.currBlocked[index_to_unblock];
+    for (int i = index_to_unblock; i < BlockedQueue.count_BLOCKED - 1; i++) {
         BlockedQueue.currBlocked[i] = BlockedQueue.currBlocked[i + 1];
     }
-
-    // Remove the top element from waitingforublock queue
-    for (int i = 0; i < BlockedQueue.count_waitingUNBLOCK - 1; i++) {
-        BlockedQueue.waitingUnblock[i] = BlockedQueue.waitingUnblock[i + 1];
-    }
-
     BlockedQueue.count_BLOCKED--;
-    BlockedQueue.count_waitingUNBLOCK--;
 }
 
 // Updates what process/device now has access to the bus (if its free)
@@ -263,6 +291,7 @@ void updateBus(void) {
     if (index != -1) {
         strcpy(DEVICE_USING_BUS, BlockedQueue.currBlocked[index].waitingOnDevice);
         BlockedQueue.currBlocked[index].busProgress = 1;    // Next process is now using the bus (IO incriments only while IDLE)
+        BlockedQueue.currBlocked[index].blockDuration += 20; // IO doesnt incriment during transitions (must counter-act) --------------------------------------------------------------------------------
     }
 }
 
@@ -280,10 +309,10 @@ void tick_bus(void) {
 
 void tick_idle(void) {
     // Unblock any processes finished
-    if (BlockedQueue.count_waitingUNBLOCK > 0) {
-        printf("COUNT WAITING: %i\n", BlockedQueue.count_waitingUNBLOCK);
+    if (BlockedQueue.count_IO > 0 || BlockedQueue.count_SLEEPING > 0 || BlockedQueue.count_WAITING > 0) {
         printf("SECTION CALLED ----------------------------------------\n");
-        BlockedQueue_dequeueByIndex(BlockedQueue.waitingUnblock[0]);
+
+        BlockedQueue_dequeueNext();
         CPUState = BLOCKED_TO_READY;
         time_transition = 10;
 
@@ -362,6 +391,7 @@ void tick_work(void) {
                 }
             }
             CPUState = IDLE;
+            nprocesses--;
             printf("@%08d    Exit, pid%i.RUNNING->EXIT, transition takes 0usecs\n",globalClock+1, currProcess.pid);
         
         }   else if (strcmp(currAction.sysCallName, "spawn") == 0) {
@@ -498,7 +528,7 @@ void tick_blocked(void) {
         //printf("PROCESS ID: %i (%s)     Number of spawned processes: %i     STATE: %d\n", queue[i].pid, queue[i].processName, queue[i].numOfSpawnedProcesses, queue[i].state);
         //printf("PID: pid%i (%s) Blocked Duration Remaining: %i\n", queue[i].pid, queue[i].processName, queue[i].blockDuration);
         // If the process is waiting / using the bus, incriment the waiting time it had spent
-        if (queue[i].busProgress == -1) {
+        if (queue[i].busProgress == -1 || queue[i].busProgress == 1) {
             queue[i].waitTime++;
             continue;
         }
@@ -509,18 +539,26 @@ void tick_blocked(void) {
             queue[i].busProgress = 2;       // Device is finished its task on the bus
 
             updateBus();                    // Allow the next process to use the bus
-            BlockedQueue.waitingUnblock[BlockedQueue.count_waitingUNBLOCK] = i;
-            BlockedQueue.count_waitingUNBLOCK++;
-            continue;
+            BlockedQueue.unblockIO[BlockedQueue.count_IO] = i;
+            BlockedQueue.count_IO++;
+            queue[i].state = WAITING_UNBLOCK;
+            printf("IO PROCESS PID.%i ADDED TO UNBLOCK\n", queue[i].pid);
         }
 
-
-        // If a regular block has finished its duration OR if a WAITING process has finished waiting, it can be unblocked
-        if ((queue[i].blockDuration <= 0 && queue[i].state == BLOCKED) || (queue[i].state == WAITING && queue[i].numOfSpawnedProcesses == 0)) {
-            //printf("Process added to be removed from blocked queue\n");
-            BlockedQueue.waitingUnblock[BlockedQueue.count_waitingUNBLOCK] = i;
-            BlockedQueue.count_waitingUNBLOCK++;
+        // For a waiting processes where all its children have finished
+        else if (queue[i].state == WAITING && queue[i].numOfSpawnedProcesses == 0) {
+            BlockedQueue.unblockWAITING[BlockedQueue.count_WAITING] = i;
+            BlockedQueue.count_WAITING++;
             queue[i].state = WAITING_UNBLOCK;
+            printf("WAITING PROCESS PID.%i ADDED TO UNBLOCK\n", queue[i].pid);
+        }
+
+        // For a sleeping processes that has finished its sleep time
+        else if (queue[i].blockDuration <= 0 && queue[i].state == BLOCKED) {
+            BlockedQueue.unblockSLEEPING[BlockedQueue.count_SLEEPING] = i;
+            BlockedQueue.count_SLEEPING++;
+            queue[i].state = WAITING_UNBLOCK;
+            printf("SLEEPING PROCESS PID.%i ADDED TO UNBLOCK (index in blocked: %i)\n", queue[i].pid, i);
         }
 
         queue[i].blockDuration--;
@@ -545,7 +583,7 @@ void execute_commands(void) {
     globalClock = 1;            // Start the CPU on the first tick (not on the zeroth)
     printf("@%08d    pid%i.READY->RUNNING, transition takes 5usecs (1..5)\n", globalClock, 0);
 
-    while (CPUState != IDLE || count_READY > 0 || BlockedQueue.count_BLOCKED > 0 || BlockedQueue.count_waitingUNBLOCK > 0) { // While either the blocked or ready queue are not empty
+    while (CPUState != IDLE || nprocesses > 0) { // While either the blocked or ready queue are not empty
     //printf("Ready Queue: %i     Blocked Queue: %i   Waiting Unblock: %i\n", count_READY, BlockedQueue.count_BLOCKED, BlockedQueue.count_waitingUNBLOCK);
     //printf("NEXT ON READY: %s\n", nextOnREADY.processName);
     //printf("COUNT READY: %i\n", BlockedQueue.count_waitingUNBLOCK);
@@ -582,7 +620,7 @@ void execute_commands(void) {
         //sleep(1);
     }
 
-    printf("@%08d    nprocesses=0, SHUTDOWN\n", globalClock);
+    printf("@%08d    nprocesses=%i, SHUTDOWN\n", globalClock, nprocesses);
     printf("@%08d    %iusecs total system time, %iusecs onCPU by all processes, %i/%i -> %i%%\n", globalClock, globalClock, cpuTime, cpuTime, globalClock, (cpuTime*100 / globalClock)); // Integer division to truncate
 }
 
