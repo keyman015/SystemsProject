@@ -113,7 +113,6 @@ typedef struct {
     int waitTime;
     int parent; // Pointer to the parent (space efficient) - MUST USE VOID *
     int numOfSpawnedProcesses;
-    int tempElapsed;
     int spawned;
 } Process;
 
@@ -183,7 +182,6 @@ void initliasiseProcess(int cmdIndex, int parentPid, int spawned) {
     p.pid = pid;
     p.parent = parentPid;
     p.busProgress = 0;
-    p.tempElapsed = 0;
     p.spawned = spawned;
     strcpy(p.processName, commands[cmdIndex].name);
     strcpy(p.waitingOnDevice, "");
@@ -310,8 +308,6 @@ void tick_bus(void) {
 void tick_idle(void) {
     // Unblock any processes finished
     if (BlockedQueue.count_IO > 0 || BlockedQueue.count_SLEEPING > 0 || BlockedQueue.count_WAITING > 0) {
-        printf("SECTION CALLED ----------------------------------------\n");
-
         BlockedQueue_dequeueNext();
         CPUState = BLOCKED_TO_READY;
         time_transition = 10;
@@ -339,16 +335,17 @@ void tick_idle(void) {
 
 int TQelapsed = 0;
 void tick_work(void) {
-    printf("@%08d    c\n", globalClock); 
     //printf("Process Name: %s\n", currProcess.processName);
     //printf("Process Duration Reamining: %i\n", currProcess.processSyscalls[currProcess.currActionIndex].duration);
-    //printf("Process ElapsedCpu time: %i\n", currProcess.elapsedCPUTime);
+    
     SystemCall currAction = currProcess.processSyscalls[currProcess.currActionIndex];
-    currProcess.elapsedCPUTime++;
-    cpuTime++;
     TQelapsed++;
 
     if (TQelapsed == TIME_QUANTUM) {
+        // On the same work tick, time quantum has expired, so it must be added back to the READY queue
+        currProcess.elapsedCPUTime++;
+        cpuTime++; // <<<----------------------------------- NOT SURE ON THIS --------------------------------
+        printf("@%08d    c\t\t\t\t%s(onCPU=%i)\n", globalClock, currProcess.processName, currProcess.elapsedCPUTime);
         printf("@%08d    time quantum expired, pid%i.RUNNING->READY, transition takes 10usecs (%i..%i)\n", globalClock, currProcess.pid, globalClock+1, globalClock+10);
         readyQueue_enqueue(currProcess);
         time_transition = 10;
@@ -367,7 +364,12 @@ void tick_work(void) {
                 //currProcess.currActionIndex++;
                 //BlockedQueue_enqueue(currProcess);                                  // So time can move while its still transitioning
                 CPUState = RUNNING_TO_SLEEPING;
-                time_transition = -1;   // Intermediate state (to keep consistent with answer timings)
+                currProcess.blockDuration = currProcess.processSyscalls[currProcess.currActionIndex].sleepDuration;
+                currProcess.currActionIndex++;
+                BlockedQueue_enqueue(currProcess); 
+                time_transition = 10;
+                printf("@%08d    sleep %i , pid%i.RUNNING->SLEEPING, transition takes 10usecs (%i..%i)\n", globalClock, currProcess.blockDuration, currProcess.pid, globalClock+1, globalClock+10);
+                //time_transition = -1;   // Intermediate state (to keep consistent with answer timings)
                 // The rest of the variables are set on the next tick (to keep consitent with answers)
 
         }   else if (strcmp(currAction.sysCallName, "exit") == 0) {
@@ -378,10 +380,15 @@ void tick_work(void) {
                     if (queue[i].pid == currProcess.parent) {
                         found = 1;
                         queue[i].numOfSpawnedProcesses--;
+                        // Set the parent on a wait call to be unblocked on the next idle tick
+                        BlockedQueue.unblockWAITING[BlockedQueue.count_WAITING] = i;
+                        BlockedQueue.count_WAITING++;
+                        queue[i].state = WAITING_UNBLOCK;
+                        printf("WAITING PROCESS PID.%i ADDED TO UNBLOCK\n", queue[i].pid);
                         break;
                     }
                 }
-                if (found == 1) {
+                if (found == 0) {
                     for (int i = 0; i < count_READY; i++) {
                         if (readyQueue[i].pid == currProcess.parent) {
                             readyQueue[i].numOfSpawnedProcesses--;
@@ -392,30 +399,43 @@ void tick_work(void) {
             }
             CPUState = IDLE;
             nprocesses--;
-            printf("@%08d    Exit, pid%i.RUNNING->EXIT, transition takes 0usecs\n",globalClock+1, currProcess.pid);
+            printf("@%08d    Exit, pid%i.RUNNING->EXIT, transition takes 0usecs\n", globalClock, currProcess.pid);
         
         }   else if (strcmp(currAction.sysCallName, "spawn") == 0) {
             int cmdIndex = find_commandIndex(currAction.processName);
             initliasiseProcess(cmdIndex, currProcess.pid, 1);                          // Requires no time from NEW -> READY
             currProcess.numOfSpawnedProcesses++;                                    // Keep track of the number of spawned processes
             currProcess.currActionIndex++;
+            time_transition = 10;
             readyQueue_enqueue(currProcess);
-            CPUState = SPAWN;                                                       // Spawn is processed on the next tick seperately
+            CPUState = RUNNING_TO_READY;    // Put the current process (the parent) back onto READY queue (already done in the previous tick)
+            printf("@%08d    spawn '%s', pid%i.NEW->READY, transition takes 0usecs\n",globalClock, currProcess.processSyscalls[currProcess.currActionIndex-1].processName, pid-1);                                                 // Spawn is processed on the next tick seperately
         
         }   else if (strcmp(currAction.sysCallName, "wait") == 0) {
             if (currProcess.numOfSpawnedProcesses == 0) {
+                currProcess.currActionIndex++;
+                readyQueue_enqueue(currProcess);
+                time_transition = 10;
                 CPUState = RUNNING_TO_READY;
+                printf("@%08d    wait (but no child processes), pid%i.RUNNING->READY\n", globalClock, currProcess.pid);
+                printf("@%08d    transition takes 10usecs (%i..%i)\n", globalClock, globalClock+1, globalClock+10);
+
             } else {
+                currProcess.state = WAITING;    // Signify the process is waiting
+                currProcess.currActionIndex++;
+                BlockedQueue_enqueue(currProcess);
+                time_transition = 10;
                 CPUState = RUNNING_TO_BLOCKED;
+                printf("@%08d    wait, pid%i.RUNNING->WAITING\n", globalClock, currProcess.pid);
+                printf("@%08d    transition takes 10usecs (%i..%i)\n", globalClock, globalClock+1, globalClock+10);
             }
-            time_transition = -1;       // For intermediate state (allows wait to be processed on the next tick)
         
         }   else if (strcmp(currAction.sysCallName, "read") == 0) {
             int devIndex        = find_deviceIndex(currAction.deviceName);          // Finds array index of the device (crashes if it doesnt exist)
             double rSpeed       = (double) devices[devIndex].readSpeed;             // Dont need double as its not used in duration calculation
             double capac        = (double) currAction.capacity;
 
-            currProcess.blockDuration   = (int) ceil( capac / rSpeed * 1000000 );   // Ciel to round up (if the duration falls in between in certain cases)
+            currProcess.blockDuration   = (int) ceil(capac / rSpeed * 1000000);           // Ciel to round up (if the duration falls in between in certain cases)
             currProcess.readSpeed       = (int) rSpeed;
             currProcess.busProgress     = -1;                                       // Set the process's busProgress to signify its waiting on the bus for IO
             strcpy(currProcess.waitingOnDevice, currAction.deviceName);
@@ -430,10 +450,7 @@ void tick_work(void) {
             int rSpeed          =  devices[devIndex].readSpeed;                     // Dont need a double as its not used for the calculation
             double wSpeed       = (double) devices[devIndex].writeSpeed;
             double capac        = (double) currAction.capacity;
-
-            currProcess.blockDuration   = (int) ceil( capac / wSpeed * 1000000 ) + 10;   // Ciel to round up (if the duration falls in between in certain cases)
-            //printf("Blocked Duration: %i\n", currProcess.blockDuration);
-            //exit(0);
+            currProcess.blockDuration   = (int) ceil(capac / wSpeed * 1000000);           // Ciel to round up (if the duration falls in between in certain cases)
             currProcess.readSpeed       = rSpeed;
             currProcess.busProgress     = -1;                                       // Set the process's busProgress to signify its waiting on the bus for IO
             strcpy(currProcess.waitingOnDevice, currAction.deviceName);
@@ -443,12 +460,17 @@ void tick_work(void) {
             CPUState        = RUNNING_TO_BLOCKED;
             updateBus();
         }
-    } 
+        return;
+    }
+    currProcess.elapsedCPUTime++;
+    cpuTime++;
+    printf("@%08d    c\t\t\t\t%s(onCPU=%i)\n", globalClock, currProcess.processName, currProcess.elapsedCPUTime); 
 }
 
 
 void tick_transition(void) {
     // For sleep system call
+#if 0
     if (CPUState == RUNNING_TO_SLEEPING && time_transition == -1) {
         currProcess.blockDuration = currProcess.processSyscalls[currProcess.currActionIndex].sleepDuration;
         currProcess.currActionIndex++;
@@ -456,9 +478,9 @@ void tick_transition(void) {
         time_transition = 10;
         printf("@%08d    sleep %i , pid%i.RUNNING->SLEEPING, transition takes 10usecs (%i..%i)\n", globalClock, currProcess.blockDuration, currProcess.pid, globalClock+1, globalClock+10);
         return;
-    
+
     // For wait system call with NO child processes
-    } else if (CPUState == RUNNING_TO_READY && time_transition == -1) {
+    if (CPUState == RUNNING_TO_READY && time_transition == -1) {
         currProcess.currActionIndex++;
         readyQueue_enqueue(currProcess);
         time_transition = 10;
@@ -484,6 +506,7 @@ void tick_transition(void) {
         printf("@%08d    pid%i.RUNNING->READY, transition takes 10usecs (%i..%i)\n", globalClock, currProcess.pid, globalClock+1, globalClock+10);
         return;
     }
+#endif
 
     time_transition--;
 
@@ -494,7 +517,9 @@ void tick_transition(void) {
             case READY_TO_RUNNING:
                 CPUState = WORKING;
                 currProcess = readyQueue_dequeue(); // So time for that process only starts after transitioning
-                printf("@%08d    pid%i now on CPU, gets new timequantum\n", globalClock, currProcess.pid);
+                printf("@%08d    pid%i now on CPU, gets new timequantum\t\t%s(onCPU=%i)\n", globalClock, currProcess.pid, currProcess.processName, currProcess.elapsedCPUTime);
+                TQelapsed = 0;
+                //currProcess.elapsedCPUTime--;
                 //printf("Process Duration Reamining: %i\n", currProcess.processSyscalls[currProcess.currActionIndex].duration);
                 break;
             
@@ -528,10 +553,6 @@ void tick_blocked(void) {
         //printf("PROCESS ID: %i (%s)     Number of spawned processes: %i     STATE: %d\n", queue[i].pid, queue[i].processName, queue[i].numOfSpawnedProcesses, queue[i].state);
         //printf("PID: pid%i (%s) Blocked Duration Remaining: %i\n", queue[i].pid, queue[i].processName, queue[i].blockDuration);
         // If the process is waiting / using the bus, incriment the waiting time it had spent
-        if (queue[i].busProgress == -1 || queue[i].busProgress == 1) {
-            queue[i].waitTime++;
-            continue;
-        }
 
         // If a process's IO has been completed -> Can be unblocked and the next process can use the bus
         if (queue[i].busProgress == 1 && queue[i].blockDuration == 0) {
@@ -561,15 +582,20 @@ void tick_blocked(void) {
             printf("SLEEPING PROCESS PID.%i ADDED TO UNBLOCK (index in blocked: %i)\n", queue[i].pid, i);
         }
 
+        // IO cannot be incrimented in this tick, only in specific cases (when idle)
+        if (queue[i].busProgress == -1 || queue[i].busProgress == 1) {
+            queue[i].waitTime++;
+            continue;
+        }
+
         queue[i].blockDuration--;
     }
 }
 
 
+// --------------------------- EXECUTE --------------------------------------
 
 
-
-int tempElapsed = 0;
 void execute_commands(void) {
     printf("-------------------------------------------------------------------------\n\n");
     printf("@%08d    REBOOTING with timequantum=%i\n", globalClock, TIME_QUANTUM);
@@ -580,20 +606,22 @@ void execute_commands(void) {
 
     CPUState = READY_TO_RUNNING;
     time_transition = 5;
+    printf("@%08d    pid%i.READY->RUNNING, transition takes 5usecs (%i..%i)\n", globalClock, 0, globalClock+1, globalClock+5);
     globalClock = 1;            // Start the CPU on the first tick (not on the zeroth)
-    printf("@%08d    pid%i.READY->RUNNING, transition takes 5usecs (1..5)\n", globalClock, 0);
 
-    while (CPUState != IDLE || nprocesses > 0) { // While either the blocked or ready queue are not empty
+    while (nprocesses > 0) { // While either the blocked or ready queue are not empty
     //printf("Ready Queue: %i     Blocked Queue: %i   Waiting Unblock: %i\n", count_READY, BlockedQueue.count_BLOCKED, BlockedQueue.count_waitingUNBLOCK);
     //printf("NEXT ON READY: %s\n", nextOnREADY.processName);
     //printf("COUNT READY: %i\n", BlockedQueue.count_waitingUNBLOCK);
-        if (globalClock == 1475) {
+        if (globalClock == 815) {
             printf("code is fucked\n");
             exit(0);
         }
 
-        tick_blocked();         // To stop time moving forward for a blocked process on the same tick its added to the queue
+        // Tick blocked processed before processing any actions (to stop it incrimenting on the same tick its added)
+        tick_blocked();
 
+        // Send the current tick to the correct type
         switch (CPUState) {
             case SPAWN:
             case READY_TO_RUNNING:
@@ -616,8 +644,10 @@ void execute_commands(void) {
                 break;
         }
 
-        globalClock++;
-        //sleep(1);
+        // Only incriment the global clock if its not the last tick (exits while loop on this tick)
+        if (nprocesses > 0) {
+            globalClock++;
+        }
     }
 
     printf("@%08d    nprocesses=%i, SHUTDOWN\n", globalClock, nprocesses);
