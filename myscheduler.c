@@ -263,6 +263,7 @@ void updateBus(void) {
     // Bus is updated
     if (index != -1) {
         strcpy(DEVICE_USING_BUS, BlockedQueue.currBlocked[index].waitingOnDevice);
+        printf("@%08d    device.%s acquired DATABUS, reading %i bytes, will take %iusecs (20+%i)\n", globalClock, DEVICE_USING_BUS, -1, BlockedQueue.currBlocked[index].blockDuration+20, BlockedQueue.currBlocked[index].blockDuration);
         BlockedQueue.currBlocked[index].busProgress = 1;    // Next process is now using the bus (IO incriments only while IDLE)
         BlockedQueue.currBlocked[index].blockDuration += 20; // IO doesnt incriment during transitions (must counter-act) --------------------------------------------------------------------------------
     }
@@ -323,15 +324,14 @@ void tick_idle(void) {
         BlockedQueue.count_IO--;
         BlockedQueue_dequeueIndex(index_to_unblock);
         idle_cycle_point++;
-        // CHECK THIS PRINT FOR PROPER WORDING FOR THE IO TRANSITION <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-        printf("@%08d    pid%i.IO->READY, transition takes 10usecs (%i..%i)\n", globalClock, nextOnREADY.pid, globalClock+1, globalClock+10);
+        printf("@%08d    pid%i.BLOCKED->READY, transition takes 10usecs (%i..%i)\n", globalClock, nextOnREADY.pid, globalClock+1, globalClock+10);
         return;
 
     } else if (idle_cycle_point <= 3) { idle_cycle_point++; }
     printf("cycle pt3: %i\n",idle_cycle_point);
 
     // Commence any pending I/O -> The bus must be in need first
-    if (idle_cycle_point == 4 && strcmp(DEVICE_USING_BUS, "") != 0) {
+    if (idle_cycle_point == 4 && strcmp(DEVICE_USING_BUS, "") == 0) {
         updateBus();
         idle_cycle_point++;
         return;
@@ -471,12 +471,14 @@ void tick_work(void) {
             //updateBus();
             time_transition = 10;
             CPUState        = RUNNING_TO_BLOCKED;
-        
+            printf("@%08d    read %ibytes, pid%i.RUNNING->BLOCKED, transition takes 10usecs (%i..%i)\n", globalClock, (int)capac, currProcess.pid, globalClock+1, globalClock+10);
+
         }   else if (strcmp(currAction.sysCallName, "write") == 0) {
             int devIndex        = find_deviceIndex(currAction.deviceName);          // Finds array index of the device (crashes if it doesnt exist)
             int rSpeed          =  devices[devIndex].readSpeed;                     // Dont need a double as its not used for the calculation
             double wSpeed       = (double) devices[devIndex].writeSpeed;
             double capac        = (double) currAction.capacity;
+            
             currProcess.blockDuration   = (int) ceil(capac / wSpeed * 1000000);           // Ciel to round up (if the duration falls in between in certain cases)
             currProcess.readSpeed       = rSpeed;
             currProcess.busProgress     = -1;                                       // Set the process's busProgress to signify its waiting on the bus for IO
@@ -485,6 +487,7 @@ void tick_work(void) {
             BlockedQueue_enqueue(currProcess);
             time_transition = 10;
             CPUState        = RUNNING_TO_BLOCKED;
+            printf("@%08d    write %ibytes, pid%i.RUNNING->BLOCKED, transition takes 10usecs (%i..%i)\n", globalClock, (int)capac, currProcess.pid, globalClock+1, globalClock+10);
             //updateBus();
         }
         return;
@@ -544,6 +547,7 @@ void tick_blocked(void) {
 
         // If a process's IO has been completed -> Can be unblocked and the next process can use the bus
         if (queue[i].busProgress == 1 && queue[i].blockDuration <= 0) {
+            printf("@%08d    device.%s completes read/write, DATABUS is now idle\n", globalClock, DEVICE_USING_BUS);
             strcpy(DEVICE_USING_BUS, "");   // Device is no longer using the bus
             queue[i].busProgress = 2;       // Device is finished its task on the bus
 
@@ -552,6 +556,8 @@ void tick_blocked(void) {
             BlockedQueue.count_IO++;
             queue[i].state = WAITING_UNBLOCK;
             printf("IO PROCESS PID.%i ADDED TO UNBLOCK\n", queue[i].pid);
+            // On the same tick, check now for unblocks
+            tick_idle();
         }
 
         // For a waiting processes where all its children have finished
