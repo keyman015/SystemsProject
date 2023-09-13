@@ -1,4 +1,8 @@
 #
+test50
+	90usecs    read    usb3.1   4000B
+	100usecs    exit
+#
 test3
 	80usecs    spawn   shortsleep
 	90usecs    spawn   longsleep

@@ -422,9 +422,9 @@ void tick_work(void) {
                 }
             }
             printf("@%08d    Exit, pid%i.RUNNING->EXIT, transition takes 0usecs\n", globalClock, currProcess.pid);
-            tick_idle();
             CPUState = IDLE;
             nprocesses--;
+            tick_idle();
             printf("Num Proc Left: %i (blocked: %i)\n", nprocesses, BlockedQueue.count_BLOCKED);
         
         }   else if (strcmp(currAction.sysCallName, "spawn") == 0) {
@@ -538,7 +538,8 @@ void tick_blocked(void) {
     Process *queue = BlockedQueue.currBlocked;
     for (int i = 0; i < BlockedQueue.count_BLOCKED; i++) {
         //printf("PROCESS ID: %i (%s)     Number of spawned processes: %i     STATE: %d\n", queue[i].pid, queue[i].processName, queue[i].numOfSpawnedProcesses, queue[i].state);
-        //printf("PID: pid%i (%s) Blocked Duration Remaining: %i\n", queue[i].pid, queue[i].processName, queue[i].blockDuration);
+        printf("PID: pid%i (%s) Blocked Duration Remaining: %i\n", queue[i].pid, queue[i].processName, queue[i].blockDuration);
+        printf("Bus Progress: %i\n", queue[i].busProgress);
         // If the process is waiting / using the bus, incriment the waiting time it had spent
 
         // If a process's IO has been completed -> Can be unblocked and the next process can use the bus
@@ -600,7 +601,7 @@ void execute_commands(void) {
     //printf("Ready Queue: %i     Blocked Queue: %i   Waiting Unblock: %i\n", count_READY, BlockedQueue.count_BLOCKED, BlockedQueue.count_waitingUNBLOCK);
     //printf("NEXT ON READY: %s\n", nextOnREADY.processName);
     //printf("COUNT READY: %i\n", BlockedQueue.count_waitingUNBLOCK);
-        if (globalClock == 1700) {
+        if (globalClock == 175) {
             printf("code is fucked\n");
             exit(0);
         }
