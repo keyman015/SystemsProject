@@ -213,7 +213,7 @@ Process readyQueue_dequeue(void) {
         front.state = RUNNING;
         return front;
         
-
+    // THIS ERROR NEEDS TO BE PROPERLY HANDLED (EXIT OR SOMETHING) <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
     } else {
         Process error;
         error.pid = -1;
@@ -229,42 +229,16 @@ void BlockedQueue_enqueue(Process p) {
     }
 }
 
-void BlockedQueue_dequeueNext(void) {
-    int index_to_unblock;
 
-    // Only processes one unblock at a time (given the order)
-    if (BlockedQueue.count_SLEEPING > 0) {
-        printf("SLEEPING UNBLOCK (count: %i)\n", BlockedQueue.count_SLEEPING);
-        index_to_unblock = BlockedQueue.unblockSLEEPING[0];
-        printf("Index unblocking: %i\n", BlockedQueue.unblockSLEEPING[0]);
-        for (int i = 0; i < BlockedQueue.count_SLEEPING - 1; i++) {
-            BlockedQueue.unblockSLEEPING[i] = BlockedQueue.unblockSLEEPING[i+1];
-        }
-        BlockedQueue.count_SLEEPING--;
-
-    } else if (BlockedQueue.count_WAITING > 0) {
-        printf("WAITING UNBLOCK\n");
-        index_to_unblock = BlockedQueue.unblockWAITING[0];
-        for (int i = 0; i < BlockedQueue.count_WAITING - 1; i++) {
-            BlockedQueue.unblockWAITING[i] = BlockedQueue.unblockWAITING[i+1];
-        }
-        BlockedQueue.count_WAITING--;
-
-    } else if (BlockedQueue.count_IO > 0) {
-        printf("IO UNBLOCK\n");
-        index_to_unblock = BlockedQueue.unblockIO[0];
-        for (int i = 0; i < BlockedQueue.count_IO - 1; i++) {
-            BlockedQueue.unblockIO[i] = BlockedQueue.unblockIO[i+1];
-        }
-        BlockedQueue.count_IO--;
-    }
-
+void BlockedQueue_dequeueIndex(int index_to_unblock) {
     // Remove the processes from the queue and move everything up
     nextOnREADY = BlockedQueue.currBlocked[index_to_unblock];
     for (int i = index_to_unblock; i < BlockedQueue.count_BLOCKED - 1; i++) {
         BlockedQueue.currBlocked[i] = BlockedQueue.currBlocked[i + 1];
     }
     BlockedQueue.count_BLOCKED--;
+    CPUState = BLOCKED_TO_READY;
+    time_transition = 10;
 }
 
 // Updates what process/device now has access to the bus (if its free)
@@ -286,6 +260,7 @@ void updateBus(void) {
         }
     }
 
+    // Bus is updated
     if (index != -1) {
         strcpy(DEVICE_USING_BUS, BlockedQueue.currBlocked[index].waitingOnDevice);
         BlockedQueue.currBlocked[index].busProgress = 1;    // Next process is now using the bus (IO incriments only while IDLE)
@@ -304,33 +279,81 @@ void tick_bus(void) {
     }
 }
 
-
+//fucked system
+int idle_cycle_point = 1;
 void tick_idle(void) {
-    // Unblock any processes finished
-    if (BlockedQueue.count_IO > 0 || BlockedQueue.count_SLEEPING > 0 || BlockedQueue.count_WAITING > 0) {
-        BlockedQueue_dequeueNext();
-        CPUState = BLOCKED_TO_READY;
-        time_transition = 10;
+    // Unblock Sleeping process
+    printf("cycle pt0: %i\n",idle_cycle_point);
+    if (idle_cycle_point == 1 && BlockedQueue.count_SLEEPING > 0) {
+        int index_to_unblock = BlockedQueue.unblockSLEEPING[0];
+        for (int i = 0; i < BlockedQueue.count_SLEEPING - 1; i++) {
+            BlockedQueue.unblockSLEEPING[i] = BlockedQueue.unblockSLEEPING[i+1];
+        }
 
-        printf("@%08d    pid%i.BLOCKED->READY, transition takes 10usecs (%i..%i)\n", globalClock, nextOnREADY.pid, globalClock+1, globalClock+10);
+        BlockedQueue.count_SLEEPING--;
+        BlockedQueue_dequeueIndex(index_to_unblock);
+        idle_cycle_point++;
+        printf("@%08d    pid%i.SLEEPING->READY, transition takes 10usecs (%i..%i)\n", globalClock, nextOnREADY.pid, globalClock+1, globalClock+10);
         return;
-    }
+
+    } else if (idle_cycle_point <= 1) { idle_cycle_point++; }
+    printf("cycle pt1: %i\n",idle_cycle_point);
+
+    if (idle_cycle_point == 2 && BlockedQueue.count_WAITING > 0) {
+        int index_to_unblock = BlockedQueue.unblockWAITING[0];
+        for (int i = 0; i < BlockedQueue.count_WAITING - 1; i++) {
+            BlockedQueue.unblockWAITING[i] = BlockedQueue.unblockWAITING[i+1];
+        }
+
+        BlockedQueue.count_WAITING--;
+        BlockedQueue_dequeueIndex(index_to_unblock);
+        idle_cycle_point++;
+        printf("@%08d    pid%i.WAITING->READY, transition takes 10usecs (%i..%i)\n", globalClock, nextOnREADY.pid, globalClock+1, globalClock+10);
+        return;
+
+    } else if (idle_cycle_point <= 2) { idle_cycle_point++; }
+    printf("cycle pt2: %i\n",idle_cycle_point);
+
+    if (idle_cycle_point == 3 && BlockedQueue.count_IO > 0) {
+        int index_to_unblock = BlockedQueue.unblockIO[0];
+        for (int i = 0; i < BlockedQueue.count_IO - 1; i++) {
+            BlockedQueue.unblockIO[i] = BlockedQueue.unblockIO[i+1];
+        }
+
+        BlockedQueue.count_IO--;
+        BlockedQueue_dequeueIndex(index_to_unblock);
+        idle_cycle_point++;
+        // CHECK THIS PRINT FOR PROPER WORDING FOR THE IO TRANSITION <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+        printf("@%08d    pid%i.IO->READY, transition takes 10usecs (%i..%i)\n", globalClock, nextOnREADY.pid, globalClock+1, globalClock+10);
+        return;
+
+    } else if (idle_cycle_point <= 3) { idle_cycle_point++; }
+    printf("cycle pt3: %i\n",idle_cycle_point);
 
     // Commence any pending I/O -> The bus must be in need first
-    if (strcmp(DEVICE_USING_BUS, "") != 0) {
-        tick_bus();
-    }
+    if (idle_cycle_point == 4 && strcmp(DEVICE_USING_BUS, "") != 0) {
+        updateBus();
+        idle_cycle_point++;
+        return;
+
+    } else if (idle_cycle_point <= 4) { idle_cycle_point++; }
+    printf("cycle pt4: %i\n",idle_cycle_point);
 
     // Commence/resume the next READY process
-    if (count_READY > 0) {
+    if ( idle_cycle_point == 5 && count_READY > 0) {
         CPUState = READY_TO_RUNNING;
         time_transition = 5;
 
+        idle_cycle_point = 1;   // Back to the start of the cycle
         printf("@%08d    pid%i.READY->RUNNING, transition takes 5usecs (%i..%i)\n", globalClock, readyQueue[0].pid, globalClock+1, globalClock+5);
         return;
-    }
 
-    printf("@%08d    Idle\n", globalClock); // remain idle if nothing else
+    }
+    printf("cycle pt5: %i (count READY: %i)\n",idle_cycle_point, count_READY);
+
+    //Remain idle if there is nothing else to do in the cycle
+    idle_cycle_point = 1;   // Reset the cycle for the next idle tick
+    printf("@%08d    Idle\n", globalClock);
 }
 
 int TQelapsed = 0;
@@ -376,6 +399,7 @@ void tick_work(void) {
             if (currProcess.spawned == 1) {
                 int found = 0;
                 Process *queue = BlockedQueue.currBlocked;
+                printf("Count BLOCKED: %i\n", BlockedQueue.count_BLOCKED);
                 for (int i = 0; i < BlockedQueue.count_BLOCKED; i++) {
                     if (queue[i].pid == currProcess.parent) {
                         found = 1;
@@ -397,9 +421,11 @@ void tick_work(void) {
                     }
                 }
             }
+            printf("@%08d    Exit, pid%i.RUNNING->EXIT, transition takes 0usecs\n", globalClock, currProcess.pid);
+            tick_idle();
             CPUState = IDLE;
             nprocesses--;
-            printf("@%08d    Exit, pid%i.RUNNING->EXIT, transition takes 0usecs\n", globalClock, currProcess.pid);
+            printf("Num Proc Left: %i (blocked: %i)\n", nprocesses, BlockedQueue.count_BLOCKED);
         
         }   else if (strcmp(currAction.sysCallName, "spawn") == 0) {
             int cmdIndex = find_commandIndex(currAction.processName);
@@ -409,8 +435,9 @@ void tick_work(void) {
             time_transition = 10;
             readyQueue_enqueue(currProcess);
             CPUState = RUNNING_TO_READY;    // Put the current process (the parent) back onto READY queue (already done in the previous tick)
-            printf("@%08d    spawn '%s', pid%i.NEW->READY, transition takes 0usecs\n",globalClock, currProcess.processSyscalls[currProcess.currActionIndex-1].processName, pid-1);                                                 // Spawn is processed on the next tick seperately
-        
+            printf("@%08d    spawn '%s', pid%i.NEW->READY, transition takes 0usecs\n",globalClock, currProcess.processSyscalls[currProcess.currActionIndex-1].processName, pid-1);
+            printf("@%08d    pid%i.RUNNING->READY, transition takes 10usecs (%i..%i)\n", globalClock, currProcess.pid, globalClock+1, globalClock+10);
+
         }   else if (strcmp(currAction.sysCallName, "wait") == 0) {
             if (currProcess.numOfSpawnedProcesses == 0) {
                 currProcess.currActionIndex++;
@@ -441,7 +468,7 @@ void tick_work(void) {
             strcpy(currProcess.waitingOnDevice, currAction.deviceName);
             currProcess.currActionIndex++;
             BlockedQueue_enqueue(currProcess);
-            updateBus();
+            //updateBus();
             time_transition = 10;
             CPUState        = RUNNING_TO_BLOCKED;
         
@@ -458,7 +485,7 @@ void tick_work(void) {
             BlockedQueue_enqueue(currProcess);
             time_transition = 10;
             CPUState        = RUNNING_TO_BLOCKED;
-            updateBus();
+            //updateBus();
         }
         return;
     }
@@ -469,48 +496,8 @@ void tick_work(void) {
 
 
 void tick_transition(void) {
-    // For sleep system call
-#if 0
-    if (CPUState == RUNNING_TO_SLEEPING && time_transition == -1) {
-        currProcess.blockDuration = currProcess.processSyscalls[currProcess.currActionIndex].sleepDuration;
-        currProcess.currActionIndex++;
-        BlockedQueue_enqueue(currProcess); 
-        time_transition = 10;
-        printf("@%08d    sleep %i , pid%i.RUNNING->SLEEPING, transition takes 10usecs (%i..%i)\n", globalClock, currProcess.blockDuration, currProcess.pid, globalClock+1, globalClock+10);
-        return;
-
-    // For wait system call with NO child processes
-    if (CPUState == RUNNING_TO_READY && time_transition == -1) {
-        currProcess.currActionIndex++;
-        readyQueue_enqueue(currProcess);
-        time_transition = 10;
-        printf("@%08d    wait (but no child processes), pid%i.RUNNING->READY\n", globalClock, currProcess.pid);
-        printf("@%08d    transition takes 10usecs (%i..%i)\n", globalClock, globalClock+1, globalClock+10);
-        return;
-    
-    // For wait system call with child processes
-    } else if (CPUState == RUNNING_TO_BLOCKED && time_transition == -1) {
-        currProcess.state = WAITING;    // Signify the process is waiting
-        currProcess.currActionIndex++;
-        BlockedQueue_enqueue(currProcess);
-        time_transition = 10;
-        printf("@%08d    wait, pid%i.RUNNING->WAITING\n", globalClock, currProcess.pid);
-        printf("@%08d    transition takes 10usecs (%i..%i)\n", globalClock, globalClock+1, globalClock+10);
-        return;
-
-    // For spawn system call
-    } else if (CPUState == SPAWN) {
-        time_transition = 10;
-        CPUState = RUNNING_TO_READY;    // Put the current process (the parent) back onto READY queue (already done in the previous tick)
-        printf("@%08d    spawn '%s', pid%i.NEW->READY, transition takes 0usecs\n",globalClock, currProcess.processSyscalls[currProcess.currActionIndex-1].processName, pid-1);
-        printf("@%08d    pid%i.RUNNING->READY, transition takes 10usecs (%i..%i)\n", globalClock, currProcess.pid, globalClock+1, globalClock+10);
-        return;
-    }
-#endif
-
-    time_transition--;
-
     printf("@%08d    +\n", globalClock);    // Signify this tick is being used to transition between states
+    time_transition--;
 
     if (time_transition == 0) {
         switch (CPUState) {
@@ -555,11 +542,11 @@ void tick_blocked(void) {
         // If the process is waiting / using the bus, incriment the waiting time it had spent
 
         // If a process's IO has been completed -> Can be unblocked and the next process can use the bus
-        if (queue[i].busProgress == 1 && queue[i].blockDuration == 0) {
+        if (queue[i].busProgress == 1 && queue[i].blockDuration <= 0) {
             strcpy(DEVICE_USING_BUS, "");   // Device is no longer using the bus
             queue[i].busProgress = 2;       // Device is finished its task on the bus
 
-            updateBus();                    // Allow the next process to use the bus
+            //updateBus();                    // Allow the next process to use the bus
             BlockedQueue.unblockIO[BlockedQueue.count_IO] = i;
             BlockedQueue.count_IO++;
             queue[i].state = WAITING_UNBLOCK;
@@ -583,7 +570,7 @@ void tick_blocked(void) {
         }
 
         // IO cannot be incrimented in this tick, only in specific cases (when idle)
-        if (queue[i].busProgress == -1 || queue[i].busProgress == 1) {
+        if (queue[i].busProgress == -1) {
             queue[i].waitTime++;
             continue;
         }
@@ -613,7 +600,7 @@ void execute_commands(void) {
     //printf("Ready Queue: %i     Blocked Queue: %i   Waiting Unblock: %i\n", count_READY, BlockedQueue.count_BLOCKED, BlockedQueue.count_waitingUNBLOCK);
     //printf("NEXT ON READY: %s\n", nextOnREADY.processName);
     //printf("COUNT READY: %i\n", BlockedQueue.count_waitingUNBLOCK);
-        if (globalClock == 815) {
+        if (globalClock == 1700) {
             printf("code is fucked\n");
             exit(0);
         }

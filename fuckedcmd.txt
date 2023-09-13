@@ -1,0 +1,91 @@
+#
+process1
+	80usecs	spawn	process2
+	90usecs	write	usb3.1   10000B
+	100usecs   sleep 500usecs
+	120usecs   read	 hd	   20000B
+	130usecs   write	terminal 500B
+	140usecs   spawn	process3
+	150usecs   read	 hd	   1000B
+	160usecs   write	hd	   8000B
+	170usecs   read	 terminal 500B
+	180usecs   write	hd	   2000B
+	190usecs   read	 hd	   3000B
+	200usecs   sleep 500usecs
+	220usecs   exit
+#
+process2
+	80usecs	spawn	process3
+	90usecs	write	hd	   5000B
+	100usecs   sleep 500usecs
+	110usecs   read	 terminal 200B
+	120usecs   write	hd	   3000B
+	130usecs   sleep 500usecs
+	140usecs   exit
+#
+process3
+	80usecs	spawn	process4
+	90usecs	read	 ssd	  3000B
+	100usecs   write	hd	   6000B
+	110usecs   sleep 500usecs
+	120usecs   read	 hd	   2000B
+	130usecs   write	terminal 300B
+	140usecs   spawn	process5
+	150usecs   read	 hd	   4000B
+	160usecs   write	hd	   2000B
+	170usecs   read	 usb3.1   10000B
+	180usecs   write	hd	   5000B
+	190usecs   sleep 500usecs
+	200usecs   exit
+#
+process4
+	80usecs	read	 hd	   2000B
+	90usecs	write	terminal 300B
+	100usecs   read	 hd	   3000B
+	110usecs   write	usb3.1   5000B
+	120usecs   sleep 500usecs
+	130usecs   exit
+#
+process5
+	80usecs	spawn	process6
+	90usecs	write	terminal 1000B
+	100usecs   sleep 500usecs
+	110usecs   read	 hd	   5000B
+	120usecs   write	hd	   6000B
+	130usecs   spawn	process7
+	140usecs   read	 terminal 200B
+	150usecs   write	hd	   3000B
+	160usecs   read	 hd	   4000B
+	170usecs   write	hd	   2000B
+	180usecs   read	 usb3.1   10000B
+	190usecs   write	hd	   5000B
+	200usecs   sleep 500usecs
+	210usecs   exit
+#
+process6
+	80usecs	spawn	process7
+	90usecs	read	 hd	   2000B
+	100usecs   write	terminal 300B
+	110usecs   read	 hd	   3000B
+	120usecs   write	usb3.1   5000B
+	130usecs   sleep 500usecs
+	140usecs   exit
+#
+process7
+	80usecs	read	 usb3.1   20000B
+	90usecs	write	hd	   10000B
+	100usecs   sleep 500usecs
+	110usecs   read	 terminal 500B
+	120usecs   write	hd	   2000B
+	130usecs   read	 hd	   3000B
+	140usecs   write	hd	   6000B
+	150usecs   read	 hd	   2000B
+	160usecs   write	terminal 300B
+	170usecs   read	 hd	   4000B
+	180usecs   write	hd	   2000B
+	190usecs   read	 usb3.1   10000B
+	200usecs   write	hd	   5000B
+	210usecs   sleep 500usecs
+	220usecs   exit
+#
+
