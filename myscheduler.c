@@ -61,10 +61,9 @@ QUESTIONS & TODO LIST:
 
 */
 
-int cpuTime = 0;
-int globalClock = 0;
-int pid = 0;                                    // Start pid from 0
-//int tempCount = 0;
+int cpuTime;
+int globalClock;
+int pid;
 
 
 // Process Structure
@@ -173,6 +172,11 @@ int find_deviceIndex(const char dName[]) {
 }
 
 void initliasiseProcess(int cmdIndex, int parentPid, int spawned) {
+    if (nprocesses > MAX_RUNNING_PROCESSES) {
+        printf("ERROR - Cannot have more than %i running processes concurrently.\n", MAX_RUNNING_PROCESSES);
+        exit(EXIT_FAILURE);
+    }
+
     Process p;
     p.state = NEW;
     p.blockDuration = 0;
@@ -241,10 +245,13 @@ void BlockedQueue_dequeueIndex(int index_to_unblock) {
     time_transition = 10;
 }
 
+// A function prototype, for the case that the bus is updated, an idle tick can be processed on the same tick
+void tick_idle();
+
 // Updates what process/device now has access to the bus (if its free)
-void updateBus(void) {
+bool updateBus(void) {
     // For the case that the bus is still being used -> Cant update
-    if (strcmp(DEVICE_USING_BUS, "") != 0) { return; }
+    if (strcmp(DEVICE_USING_BUS, "") != 0) { return false; }
 
     int max_rSpeed  = -1;   // Read speed
     int max_wTime   = -1;   // Wait time (if the read speed is the same, it then compares wait times)
@@ -263,28 +270,24 @@ void updateBus(void) {
     // Bus is updated
     if (index != -1) {
         strcpy(DEVICE_USING_BUS, BlockedQueue.currBlocked[index].waitingOnDevice);
-        printf("@%08d    device.%s acquired DATABUS, reading %i bytes, will take %iusecs (20+%i)\n", globalClock, DEVICE_USING_BUS, -1, BlockedQueue.currBlocked[index].blockDuration+20, BlockedQueue.currBlocked[index].blockDuration);
+        printf("@%08d    device.%s acquired DATABUS, reading -- bytes, will take %iusecs (20+%i)\n", globalClock, DEVICE_USING_BUS, BlockedQueue.currBlocked[index].blockDuration+20, BlockedQueue.currBlocked[index].blockDuration);
         BlockedQueue.currBlocked[index].busProgress = 1;    // Next process is now using the bus (IO incriments only while IDLE)
-        BlockedQueue.currBlocked[index].blockDuration += 20; // IO doesnt incriment during transitions (must counter-act) --------------------------------------------------------------------------------
+        BlockedQueue.currBlocked[index].blockDuration += 20; // IO doesnt incriment during transitions (must counter-act)
+        // On the same tick the bus is updated, another idle tick is processed
+        tick_idle();
+        return true;
     }
+
+    // Bus is NOT updated
+    return false;
 }
 
-void tick_bus(void) {
-    for (int i = 0; i < BlockedQueue.count_BLOCKED; i++) {
-        // Incriment only the process that is using the bus currently
-        if (BlockedQueue.currBlocked[i].busProgress == 1) {
-            // IO progresses
-            BlockedQueue.currBlocked[i].blockDuration--;
-            return;
-        }
-    }
-}
 
 //fucked system
 int idle_cycle_point = 1;
 void tick_idle(void) {
     // Unblock Sleeping process
-    printf("cycle pt0: %i\n",idle_cycle_point);
+    //printf("%i - cycle pt0: %i\n",globalClock, idle_cycle_point);
     if (idle_cycle_point == 1 && BlockedQueue.count_SLEEPING > 0) {
         int index_to_unblock = BlockedQueue.unblockSLEEPING[0];
         for (int i = 0; i < BlockedQueue.count_SLEEPING - 1; i++) {
@@ -298,7 +301,7 @@ void tick_idle(void) {
         return;
 
     } else if (idle_cycle_point <= 1) { idle_cycle_point++; }
-    printf("cycle pt1: %i\n",idle_cycle_point);
+    //printf("cycle pt1: %i\n",idle_cycle_point);
 
     if (idle_cycle_point == 2 && BlockedQueue.count_WAITING > 0) {
         int index_to_unblock = BlockedQueue.unblockWAITING[0];
@@ -313,7 +316,7 @@ void tick_idle(void) {
         return;
 
     } else if (idle_cycle_point <= 2) { idle_cycle_point++; }
-    printf("cycle pt2: %i\n",idle_cycle_point);
+    //printf("cycle pt2: %i\n",idle_cycle_point);
 
     if (idle_cycle_point == 3 && BlockedQueue.count_IO > 0) {
         int index_to_unblock = BlockedQueue.unblockIO[0];
@@ -328,16 +331,16 @@ void tick_idle(void) {
         return;
 
     } else if (idle_cycle_point <= 3) { idle_cycle_point++; }
-    printf("cycle pt3: %i\n",idle_cycle_point);
+    //printf("cycle pt3: %i\n",idle_cycle_point);
 
     // Commence any pending I/O -> The bus must be in need first
     if (idle_cycle_point == 4 && strcmp(DEVICE_USING_BUS, "") == 0) {
-        updateBus();
         idle_cycle_point++;
-        return;
+        // If the bus is updated, consider the current idle tick complete and return (if not conintue)
+        if (updateBus()) { return; }
 
     } else if (idle_cycle_point <= 4) { idle_cycle_point++; }
-    printf("cycle pt4: %i\n",idle_cycle_point);
+    //printf("cycle pt4: %i\n",idle_cycle_point);
 
     // Commence/resume the next READY process
     if ( idle_cycle_point == 5 && count_READY > 0) {
@@ -349,7 +352,7 @@ void tick_idle(void) {
         return;
 
     }
-    printf("cycle pt5: %i (count READY: %i)\n",idle_cycle_point, count_READY);
+    //printf("cycle pt5: %i (count ready: %i)\n",idle_cycle_point, count_READY);
 
     //Remain idle if there is nothing else to do in the cycle
     idle_cycle_point = 1;   // Reset the cycle for the next idle tick
@@ -399,7 +402,6 @@ void tick_work(void) {
             if (currProcess.spawned == 1) {
                 int found = 0;
                 Process *queue = BlockedQueue.currBlocked;
-                printf("Count BLOCKED: %i\n", BlockedQueue.count_BLOCKED);
                 for (int i = 0; i < BlockedQueue.count_BLOCKED; i++) {
                     if (queue[i].pid == currProcess.parent) {
                         found = 1;
@@ -425,7 +427,6 @@ void tick_work(void) {
             CPUState = IDLE;
             nprocesses--;
             tick_idle();
-            printf("Num Proc Left: %i (blocked: %i)\n", nprocesses, BlockedQueue.count_BLOCKED);
         
         }   else if (strcmp(currAction.sysCallName, "spawn") == 0) {
             int cmdIndex = find_commandIndex(currAction.processName);
@@ -494,7 +495,7 @@ void tick_work(void) {
     }
     currProcess.elapsedCPUTime++;
     cpuTime++;
-    printf("@%08d    c\t\t\t\t%s(onCPU=%i)\n", globalClock, currProcess.processName, currProcess.elapsedCPUTime); 
+    printf("@%08d    c\t\t\t\t%s(onCPU=%i)  (dur: %i)\n", globalClock, currProcess.processName, currProcess.elapsedCPUTime, currAction.duration); 
 }
 
 
@@ -509,27 +510,24 @@ void tick_transition(void) {
                 currProcess = readyQueue_dequeue(); // So time for that process only starts after transitioning
                 printf("@%08d    pid%i now on CPU, gets new timequantum\t\t%s(onCPU=%i)\n", globalClock, currProcess.pid, currProcess.processName, currProcess.elapsedCPUTime);
                 TQelapsed = 0;
-                //currProcess.elapsedCPUTime--;
-                //printf("Process Duration Reamining: %i\n", currProcess.processSyscalls[currProcess.currActionIndex].duration);
                 break;
             
             case RUNNING_TO_BLOCKED:
             case RUNNING_TO_SLEEPING:
-                CPUState = IDLE; // Not sure on this
-                tick_idle(); // To allow READY->RUNNING on the same tick
+                CPUState = IDLE;
+                tick_idle();    // To allow READY->RUNNING on the same tick
                 break;
 
             case BLOCKED_TO_READY:
-                CPUState = IDLE; // not sure on this
+                CPUState = IDLE;
                 readyQueue_enqueue(nextOnREADY);
                 tick_idle();    // On the same tick, initialise READY->RUNNING for the recently enqued process
                 break;
             
             case RUNNING_TO_READY:
                 CPUState = IDLE;
-                printf("CPU is now idle\n");
+                printf("%i - CPU is now idle\n", globalClock);
                 tick_idle();    // As soon as its gone from RUNNING->READY, start the process (on the same tick) to go from READY->RUNNING
-                //exit(0);
             
             default:
                 break;
@@ -541,12 +539,18 @@ void tick_blocked(void) {
     Process *queue = BlockedQueue.currBlocked;
     for (int i = 0; i < BlockedQueue.count_BLOCKED; i++) {
         //printf("PROCESS ID: %i (%s)     Number of spawned processes: %i     STATE: %d\n", queue[i].pid, queue[i].processName, queue[i].numOfSpawnedProcesses, queue[i].state);
-        printf("PID: pid%i (%s) Blocked Duration Remaining: %i\n", queue[i].pid, queue[i].processName, queue[i].blockDuration);
-        printf("Bus Progress: %i\n", queue[i].busProgress);
+        //printf("PID: pid%i (%s) Blocked Duration Remaining: %i\n", queue[i].pid, queue[i].processName, queue[i].blockDuration);
+        //printf("Bus Progress: %i\n", queue[i].busProgress);
         // If the process is waiting / using the bus, incriment the waiting time it had spent
 
+        // A processes waiting on the bus cannot be incrimented (only when on the bus it can be)
+        if (queue[i].busProgress == -1) {
+            queue[i].waitTime++;
+            continue;
+        }
+
         // If a process's IO has been completed -> Can be unblocked and the next process can use the bus
-        if (queue[i].busProgress == 1 && queue[i].blockDuration <= 0) {
+        else if (queue[i].busProgress == 1 && queue[i].blockDuration <= 0) {
             printf("@%08d    device.%s completes read/write, DATABUS is now idle\n", globalClock, DEVICE_USING_BUS);
             strcpy(DEVICE_USING_BUS, "");   // Device is no longer using the bus
             queue[i].busProgress = 2;       // Device is finished its task on the bus
@@ -576,12 +580,6 @@ void tick_blocked(void) {
             printf("SLEEPING PROCESS PID.%i ADDED TO UNBLOCK (index in blocked: %i)\n", queue[i].pid, i);
         }
 
-        // IO cannot be incrimented in this tick, only in specific cases (when idle)
-        if (queue[i].busProgress == -1) {
-            queue[i].waitTime++;
-            continue;
-        }
-
         queue[i].blockDuration--;
     }
 }
@@ -591,6 +589,9 @@ void tick_blocked(void) {
 
 
 void execute_commands(void) {
+    globalClock = 0;    // Spawn first processes on tick 0
+    cpuTime     = 0;    // No CPU time yet
+    pid         = 0;    // PIDs start at 0
     printf("-------------------------------------------------------------------------\n\n");
     printf("@%08d    REBOOTING with timequantum=%i\n", globalClock, TIME_QUANTUM);
 
@@ -601,13 +602,11 @@ void execute_commands(void) {
     CPUState = READY_TO_RUNNING;
     time_transition = 5;
     printf("@%08d    pid%i.READY->RUNNING, transition takes 5usecs (%i..%i)\n", globalClock, 0, globalClock+1, globalClock+5);
-    globalClock = 1;            // Start the CPU on the first tick (not on the zeroth)
 
     while (nprocesses > 0) { // While either the blocked or ready queue are not empty
-    //printf("Ready Queue: %i     Blocked Queue: %i   Waiting Unblock: %i\n", count_READY, BlockedQueue.count_BLOCKED, BlockedQueue.count_waitingUNBLOCK);
-    //printf("NEXT ON READY: %s\n", nextOnREADY.processName);
-    //printf("COUNT READY: %i\n", BlockedQueue.count_waitingUNBLOCK);
-        if (globalClock == 175) {
+        globalClock++;
+
+        if (globalClock == 1000) {
             printf("code is fucked\n");
             exit(0);
         }
@@ -636,11 +635,6 @@ void execute_commands(void) {
             
             default:
                 break;
-        }
-
-        // Only incriment the global clock if its not the last tick (exits while loop on this tick)
-        if (nprocesses > 0) {
-            globalClock++;
         }
     }
 
@@ -759,6 +753,12 @@ void read_commands(char argv0[], char filename[]) {
         if (line[0] != '\t') {
             char cName[MAX_COMMAND_NAME];
             if (sscanf(line, "%s", cName) == 1) {
+                // Error check - for the case that the previous command has no system calls
+                if (COMMAND_COUNT > 0 && commands[COMMAND_COUNT].numActions == 0) {
+                    printf("ERROR: Command '%s' has no system calls/actions.\n", commands[COMMAND_COUNT].name);
+                    exit(EXIT_FAILURE);
+                }
+
                 COMMAND_COUNT++;
                 check_commandName(cName);  // Check if the name is not a repeat
                 strcpy(commands[COMMAND_COUNT].name, cName);
