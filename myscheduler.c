@@ -27,7 +27,7 @@
 #define MAX_SYSCALLS_PER_PROCESS        40
 #define MAX_SYSCALL_NAME                6   // Leaving room for null-byte
 #define MAX_RUNNING_PROCESSES           50
-#define MAX_PROCESS_NAME                15  // CHANGE THIS FOR LONGER PROCESS NAMES
+#define MAX_PROCESS_NAME                15  // CHANGE THIS FOR LONGER PROCESS NAMES (include space for null-byte)
 
 //  NOTE THAT DEVICE DATA-TRANSFER-RATES ARE MEASURED IN BYTES/SECOND,
 //  THAT ALL TIMES ARE MEASURED IN MICROSECONDS (usecs),
@@ -47,23 +47,11 @@ int     DEVICE_COUNT = 0;
 int     TIME_QUANTUM = DEFAULT_TIME_QUANTUM;
 int     COMMAND_COUNT = -1;                     // Count is increased for every new command found (so it will be increased to start at indexing 0)
 char    DEVICE_USING_BUS[MAX_DEVICE_NAME] = ""; // Nothing is using the bus currently
-
-
-
-
-/*
-
-QUESTIONS & TODO LIST:
--> Are r/w speeds needed to be stored in 32 or 64-bit values?
--> Ensure total number of non-terminated processes (including blocked) <= MAX_RUNNING_PROCESSES & error handling in such cases it does happen
--> error cases for dequeue (pid = -1)
--> pid counting starts at 0 not 1!!!!
-
-*/
+int pid;
 
 int cpuTime;
 int globalClock;
-int pid;
+
 
 
 // Process Structure
@@ -145,7 +133,6 @@ int time_transition = 0;
 int nprocesses = 0;
 Process currProcess;
 Process nextOnREADY;
-void readyQueue_enqueue(Process p);
 
 int find_commandIndex(const char cName[]) {
     for (int i = 0; i < COMMAND_COUNT; i++) {
@@ -171,8 +158,44 @@ int find_deviceIndex(const char dName[]) {
     exit(EXIT_FAILURE);
 }
 
+void readyQueue_enqueue(Process p) {
+    readyQueue[count_READY] = p;
+    count_READY++;
+    p.state = READY;
+}
+
+Process readyQueue_dequeue(void) {
+    Process front = readyQueue[0];
+    for (int i = 0; i < count_READY; i++) {
+        readyQueue[i] = readyQueue[i + 1];
+    }
+    
+    count_READY--;
+    front.state = RUNNING;
+    return front;
+}
+
+void BlockedQueue_enqueue(Process p) {
+    if (BlockedQueue.count_BLOCKED < MAX_RUNNING_PROCESSES) {
+        if (p.state != WAITING) { p.state = BLOCKED; }          // Set state to BLOCKED if the process isnt waiting (a different blocked state)
+        BlockedQueue.currBlocked[BlockedQueue.count_BLOCKED] = p;
+        BlockedQueue.count_BLOCKED++;
+    }
+}
+
+void BlockedQueue_dequeueIndex(int index_to_unblock) {
+    // Remove the processes from the queue and move everything up
+    nextOnREADY = BlockedQueue.currBlocked[index_to_unblock];
+    for (int i = index_to_unblock; i < BlockedQueue.count_BLOCKED - 1; i++) {
+        BlockedQueue.currBlocked[i] = BlockedQueue.currBlocked[i + 1];
+    }
+    BlockedQueue.count_BLOCKED--;
+    CPUState = BLOCKED_TO_READY;
+    time_transition = 10;
+}
+
 void initliasiseProcess(int cmdIndex, int parentPid, int spawned) {
-    if (nprocesses > MAX_RUNNING_PROCESSES) {
+    if (nprocesses >= MAX_RUNNING_PROCESSES) {
         printf("ERROR - Cannot have more than %i running processes concurrently.\n", MAX_RUNNING_PROCESSES);
         exit(EXIT_FAILURE);
     }
@@ -195,54 +218,6 @@ void initliasiseProcess(int cmdIndex, int parentPid, int spawned) {
     pid++;  // Incriment the next available pid
     nprocesses++;
     readyQueue_enqueue(p);
-}
-
-void readyQueue_enqueue(Process p) {
-    // If max running processes has been reached
-    if (count_READY >= MAX_RUNNING_PROCESSES) { return; }
-
-    readyQueue[count_READY] = p;
-    count_READY++;
-    p.state = READY;
-}
-
-Process readyQueue_dequeue(void) {
-    if (count_READY > 0) {
-        Process front = readyQueue[0];
-
-        for (int i = 0; i < count_READY; i++) {
-            readyQueue[i] = readyQueue[i + 1];
-        }
-        count_READY--;
-        front.state = RUNNING;
-        return front;
-        
-    // THIS ERROR NEEDS TO BE PROPERLY HANDLED (EXIT OR SOMETHING) <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-    } else {
-        Process error;
-        error.pid = -1;
-        return error;
-    }
-}
-
-void BlockedQueue_enqueue(Process p) {
-    if (BlockedQueue.count_BLOCKED < MAX_RUNNING_PROCESSES) {
-        if (p.state != WAITING) { p.state = BLOCKED; }          // Set state to BLOCKED if the process isnt waiting (a different blocked state)
-        BlockedQueue.currBlocked[BlockedQueue.count_BLOCKED] = p;
-        BlockedQueue.count_BLOCKED++;
-    }
-}
-
-
-void BlockedQueue_dequeueIndex(int index_to_unblock) {
-    // Remove the processes from the queue and move everything up
-    nextOnREADY = BlockedQueue.currBlocked[index_to_unblock];
-    for (int i = index_to_unblock; i < BlockedQueue.count_BLOCKED - 1; i++) {
-        BlockedQueue.currBlocked[i] = BlockedQueue.currBlocked[i + 1];
-    }
-    BlockedQueue.count_BLOCKED--;
-    CPUState = BLOCKED_TO_READY;
-    time_transition = 10;
 }
 
 // A function prototype, for the case that the bus is updated, an idle tick can be processed on the same tick
@@ -665,6 +640,12 @@ void trim_line(char line[]) {
 }
 
 void check_commandName(const char *cName) {
+    // Check for too long of a name (strlen doesnt include null-byte, so check has to be >=)
+    if (strlen(cName) >= MAX_PROCESS_NAME) {
+        printf("ERROR: Command name '%s' is too long, the limit is currently %i.\n", cName, MAX_PROCESS_NAME);
+        exit(EXIT_FAILURE);
+    }
+
     for (int i = 0; i < COMMAND_COUNT; i++) {
         if (strcmp(cName, commands[i].name) == 0) {
             printf("ERROR: Can't have two commands with the same name '%s'.\n", cName);
@@ -770,6 +751,12 @@ void read_commands(char argv0[], char filename[]) {
 
         // Parsing a new system call for the current command
         } else {
+            // Check if the follow command to be parsed isnt past the limit
+            if (commands[COMMAND_COUNT].numActions >= MAX_SYSCALLS_PER_PROCESS) {
+                printf("ERROR: Too many system calls for command/process '%s'. Limit is currently %i\n", commands[COMMAND_COUNT].name, MAX_SYSCALLS_PER_PROCESS);
+                exit(EXIT_FAILURE);
+            }
+
             bool error = false;
             int duration;
             int capacity;
