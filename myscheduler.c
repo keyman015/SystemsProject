@@ -96,7 +96,7 @@ typedef struct {
     int blockDuration;
     SystemCall processSyscalls[MAX_SYSCALLS_PER_PROCESS];
     int busProgress;    // 0 for bus not needed, -1 for bus is needed, 1 for process is using bus, 2 for process has finished with bus
-    int readSpeed;
+    long long int readSpeed;
     int waitTime;
     int parent; // Pointer to the parent (space efficient) - MUST USE VOID *
     int numOfSpawnedProcesses;
@@ -105,8 +105,8 @@ typedef struct {
 
 struct {
     char name[MAX_DEVICE_NAME];
-    int readSpeed;    // 64-bit values
-    int writeSpeed;
+    long long int readSpeed;    // 64-bit values for added security
+    long long int writeSpeed;
 } devices[MAX_DEVICES];
 
 struct {
@@ -117,7 +117,7 @@ struct {
 
 struct {
     int count_BLOCKED;
-    int count_IO;
+    int count_IO;       // These 3 counts are for waiting for ublock queues
     int count_WAITING;
     int count_SLEEPING;
     Process currBlocked[MAX_RUNNING_PROCESSES];
@@ -128,9 +128,10 @@ struct {
 
 int count_READY = 0;
 Process readyQueue[MAX_RUNNING_PROCESSES];
-CPUStates CPUState = IDLE;
+CPUStates CPUState  = IDLE;
 int time_transition = 0;
-int nprocesses = 0;
+int count_READY     = 0;
+int nprocesses      = 0;
 Process currProcess;
 Process nextOnREADY;
 
@@ -169,7 +170,7 @@ Process readyQueue_dequeue(void) {
     for (int i = 0; i < count_READY; i++) {
         readyQueue[i] = readyQueue[i + 1];
     }
-    
+
     count_READY--;
     front.state = RUNNING;
     return front;
@@ -228,9 +229,9 @@ bool updateBus(void) {
     // For the case that the bus is still being used -> Cant update
     if (strcmp(DEVICE_USING_BUS, "") != 0) { return false; }
 
-    int max_rSpeed  = -1;   // Read speed
-    int max_wTime   = -1;   // Wait time (if the read speed is the same, it then compares wait times)
-    int index       = -1;   // Index of the next possible process to use the bus
+    long long int max_rSpeed  = -1;   // Read speed
+    int max_wTime               = -1;   // Wait time (if the read speed is the same, it then compares wait times)
+    int index                   = -1;   // Index of the next possible process to use the bus
     for (int i = 0; i < BlockedQueue.count_BLOCKED; i++) {
         if (BlockedQueue.currBlocked[i].busProgress == -1) { // Make sure its waiting for the bus
             if (BlockedQueue.currBlocked[i].readSpeed > max_rSpeed || (BlockedQueue.currBlocked[i].readSpeed == max_rSpeed && BlockedQueue.currBlocked[i].waitTime > max_wTime)) {
@@ -438,13 +439,12 @@ void tick_work(void) {
             double rSpeed       = (double) devices[devIndex].readSpeed;             // Dont need double as its not used in duration calculation
             double capac        = (double) currAction.capacity;
 
-            currProcess.blockDuration   = (int) ceil(capac / rSpeed * 1000000);           // Ciel to round up (if the duration falls in between in certain cases)
-            currProcess.readSpeed       = (int) rSpeed;
+            currProcess.blockDuration   = (int) ceil(capac / rSpeed * 1000000);     // Ciel to round up (if the duration falls in between in certain cases)
+            currProcess.readSpeed       = devices[devIndex].readSpeed;              // Retain the 64-bit value
             currProcess.busProgress     = -1;                                       // Set the process's busProgress to signify its waiting on the bus for IO
             strcpy(currProcess.waitingOnDevice, currAction.deviceName);
             currProcess.currActionIndex++;
             BlockedQueue_enqueue(currProcess);
-            //updateBus();
             time_transition = 10;
             CPUState        = RUNNING_TO_BLOCKED;
             printf("@%08d    read %ibytes, pid%i.RUNNING->BLOCKED, transition takes 10usecs (%i..%i)\n", globalClock, (int)capac, currProcess.pid, globalClock+1, globalClock+10);
@@ -455,8 +455,8 @@ void tick_work(void) {
             double wSpeed       = (double) devices[devIndex].writeSpeed;
             double capac        = (double) currAction.capacity;
             
-            currProcess.blockDuration   = (int) ceil(capac / wSpeed * 1000000);           // Ciel to round up (if the duration falls in between in certain cases)
-            currProcess.readSpeed       = rSpeed;
+            currProcess.blockDuration   = (int) ceil(capac / wSpeed * 1000000);     // Ciel to round up (if the duration falls in between in certain cases)
+            currProcess.readSpeed       = devices[devIndex].readSpeed;              // Retain the 64-bit value
             currProcess.busProgress     = -1;                                       // Set the process's busProgress to signify its waiting on the bus for IO
             strcpy(currProcess.waitingOnDevice, currAction.deviceName);
             currProcess.currActionIndex++;
@@ -464,7 +464,6 @@ void tick_work(void) {
             time_transition = 10;
             CPUState        = RUNNING_TO_BLOCKED;
             printf("@%08d    write %ibytes, pid%i.RUNNING->BLOCKED, transition takes 10usecs (%i..%i)\n", globalClock, (int)capac, currProcess.pid, globalClock+1, globalClock+10);
-            //updateBus();
         }
         return;
     }
@@ -530,7 +529,6 @@ void tick_blocked(void) {
             strcpy(DEVICE_USING_BUS, "");   // Device is no longer using the bus
             queue[i].busProgress = 2;       // Device is finished its task on the bus
 
-            //updateBus();                    // Allow the next process to use the bus
             BlockedQueue.unblockIO[BlockedQueue.count_IO] = i;
             BlockedQueue.count_IO++;
             queue[i].state = WAITING_UNBLOCK;
@@ -675,9 +673,9 @@ void read_sysconfig(char argv0[], char filename[]) {
         // Parsing device configuration
         if (strncmp(line, "device", 6) == 0) {
             char dName[MAX_DEVICE_NAME];
-            int rSpeed;
-            int wSpeed;
-            if (sscanf(line, "device %s %iBps %iBps", dName, &rSpeed, &wSpeed) == 3) {
+            long long int rSpeed;
+            long long int wSpeed;
+            if (sscanf(line, "device %s %lliBps %lliBps", dName, &rSpeed, &wSpeed) == 3) {
                 strcpy(devices[DEVICE_COUNT].name, dName);
                 devices[DEVICE_COUNT].readSpeed     = rSpeed;
                 devices[DEVICE_COUNT].writeSpeed    = wSpeed;
