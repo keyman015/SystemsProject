@@ -126,7 +126,6 @@ struct {
     int unblockSLEEPING[MAX_RUNNING_PROCESSES];
 } BlockedQueue;
 
-int count_READY = 0;
 Process readyQueue[MAX_RUNNING_PROCESSES];
 CPUStates CPUState  = IDLE;
 int time_transition = 0;
@@ -451,7 +450,6 @@ void tick_work(void) {
 
         }   else if (strcmp(currAction.sysCallName, "write") == 0) {
             int devIndex        = find_deviceIndex(currAction.deviceName);          // Finds array index of the device (crashes if it doesnt exist)
-            int rSpeed          =  devices[devIndex].readSpeed;                     // Dont need a double as its not used for the calculation
             double wSpeed       = (double) devices[devIndex].writeSpeed;
             double capac        = (double) currAction.capacity;
             
@@ -579,7 +577,7 @@ void execute_commands(void) {
     while (nprocesses > 0) { // While either the blocked or ready queue are not empty
         globalClock++;
 
-        if (globalClock == 1000) {
+        if (globalClock == 10000) {
             printf("code is fucked\n");
             exit(0);
         }
@@ -828,8 +826,8 @@ void _dump_systemConfig() {
     for (int i = 0; i < DEVICE_COUNT; i++) {
         printf("DEVICE %i\n", i+1);
         printf("name: %s\n", devices[i].name);
-        printf("rspeed: %i\n", devices[i].readSpeed);
-        printf("wspeed: %i\n", devices[i].writeSpeed);
+        printf("rspeed: %lli\n", devices[i].readSpeed);
+        printf("wspeed: %lli\n", devices[i].writeSpeed);
         printf("\n");
     }
 }
