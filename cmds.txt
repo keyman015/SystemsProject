@@ -1,7 +1,7 @@
 #
-test50
+test
 	90usecs    read    usb3.1   4000B
-	100usecs    exit
+	10usecs    exit
 #
 test3
 	80usecs    spawn   shortsleep
@@ -17,10 +17,6 @@ shortsleep
 	10usecs    sleep   15usecs
 	20usecs    sleep   30usecs
 	50usecs    exit
-#
-test
-	90usecs    read    usb3.1   4000B
-	10usecs    exit
 #
 copyfile
 	200usecs   read    hd       48000B
